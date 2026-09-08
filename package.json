@@ -1,0 +1,15 @@
+{
+  "name": "whl-guess",
+  "private": true,
+  "description": "WHL 竞猜系统 — CF Pages + Pages Functions + D1；发奖同步到 AstrBot 插件",
+  "scripts": {
+    "dev": "wrangler pages dev public --d1 DB",
+    "db:local": "wrangler d1 migrations apply whl-guess --local",
+    "db:remote": "wrangler d1 migrations apply whl-guess --remote",
+    "deploy": "wrangler pages deploy public",
+    "deploy:cron": "cd cron-worker && wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
