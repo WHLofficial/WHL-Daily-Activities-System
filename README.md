@@ -71,7 +71,8 @@ bash scripts/smoke-test.sh                                # 端到端冒烟（�
 - 竞猜系统**不重做注册登录**：跨项目绑定赛事系统的 KV（`SESSION_KV`）与 D1（`TOUR_DB`），读 `whl_session` cookie 验证身份，用户镜像进本库（`users.tour_id`）。
 - 角色映射：赛事 `admin/superadmin` → 竞猜管理员；`coach`（含观众号）→ 普通用户；发起人是本库 `initiators` 名单，管理员在「发起人名单」里勾选。
 - **提交预测前必须绑定 QQ**（未绑定提交返回 403 并引导到绑定页）；绑定码流程见插件对接文档。
-- 赛事系统侧需配 `COOKIE_DOMAIN` 变量（如 `.example.com`）让 cookie 跨子域生效；竞猜绑定到赛事系统同主域的子域（如 `guess.example.com`）。
+- 主域名 `whleague.win`：竞猜绑 `guess.whleague.win`，赛事系统在 `whleague.win`（或其子域）。
+- 赛事系统侧执行 `npx wrangler secret put COOKIE_DOMAIN` 填 `.whleague.win`（用 secret 而非 vars：`wrangler deploy` 会覆盖 dashboard vars），cookie 即跨子域生效。
 - 本地开发两端口不共享 cookie，用保留的自建账号登录联调（管理员 setup 流程不变）。
 
 ## 插件侧（AstrBot）

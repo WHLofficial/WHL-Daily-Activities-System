@@ -134,7 +134,7 @@ GET  /sync/summary?date=   （按人汇总，对账用）
 
 ## 四、身份打通（已实现，2026-09-08）
 
-- **登录（主通道）**：竞猜跨项目绑定赛事系统的 KV（会话真源 `sess:<token>`）与 D1 `whl` 库（user 表），收到请求读 `whl_session` cookie → KV 取 userId → 查 user 表 → 角色映射后镜像进本库 `users`（`tour_id` 唯一键，upsert）。赛事系统仅需把 cookie 的 Domain 设为主域根（`COOKIE_DOMAIN` 变量，可选；不设则 host-only，仅同主机名共享）。
+- **登录（主通道）**：竞猜跨项目绑定赛事系统的 KV（会话真源 `sess:<token>`）与 D1 `whl` 库（user 表），收到请求读 `whl_session` cookie → KV 取 userId → 查 user 表 → 角色映射后镜像进本库 `users`（`tour_id` 唯一键，upsert）。赛事系统仅需把 cookie 的 Domain 设为主域根（`COOKIE_DOMAIN` secret = `.whleague.win`，可选；不设则 host-only，仅同主机名共享）。
 - **角色映射**：赛事 `admin/superadmin` → 竞猜 `admin`；`coach`（含 locked=1 的观众号）→ 竞猜 `user`（locked 是「未解锁绑队」的观众，放行）；`must_change_pw=1` 视为未登录。发起人不进角色体系，用本库 `initiators` 名单表，管理员在后台勾选。
 - **登录（退路，dev 用）**：自建账号密码会话保留——本地两端口域名不共享 cookie，用自建登录联调；生产以共享会话为准。
 - **QQ 认证前置**：提交预测必须已绑定 QQ（`PUT /predictions` 无 `user_binding` 行返回 403 `need_binding`，前端跳绑定页）；观众（locked coach）与 coach 同权可猜。
