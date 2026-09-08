@@ -1,0 +1,11 @@
+{
+  "name": "whl-guess-cron",
+  "main": "src/index.js",
+  "compatibility_date": "2025-09-01",
+  "triggers": {
+    "crons": ["*/5 * * * *", "0 9 * * *"]
+  },
+  "vars": {
+    "APP_URL": "https://whl-guess.pages.dev"
+  }
+}
