@@ -93,9 +93,10 @@ const TOUR_COOKIE = 'whl_session';
 
 async function mirrorTourUser(env: any, tour: any): Promise<any> {
   const role = tour.role === 'admin' || tour.role === 'superadmin' ? 'admin' : 'user';
+  // 密码列填空值：赛事系统身份不走本地密码登录（verifyPassword 永不匹配空哈希）
   return env.DB.prepare(
-    `INSERT INTO users (tour_id, username, display_name, role)
-       VALUES (?, ?, ?, ?)
+    `INSERT INTO users (tour_id, username, display_name, role, password_salt, password_hash)
+       VALUES (?, ?, ?, ?, '', '')
        ON CONFLICT(tour_id) DO UPDATE SET display_name = excluded.display_name, role = excluded.role
      RETURNING id, username, display_name, role`,
   ).bind(tour.id, tour.name, tour.name, role).first();
@@ -112,12 +113,16 @@ async function getTourSessionUser(env: any, request: Request): Promise<any | nul
   const tour = await env.TOUR_DB.prepare(
     'SELECT id, name, role, locked, must_change_pw FROM user WHERE id = ?',
   ).bind(userId).first() as any;
-  if (!tour || tour.must_change_pw === 1) return null;
+  if (!tour) return null;
+  if (tour.must_change_pw === 1) return null;
   return mirrorTourUser(env, tour);
 }
 
 export async function getAuthUser(env: any, request: Request): Promise<any | null> {
-  const tour = await getTourSessionUser(env, request).catch(() => null);
+  const tour = await getTourSessionUser(env, request).catch((e: any) => {
+    console.error('[tour-auth] failed:', e?.message || e);
+    return null;
+  });
   if (tour) return tour;
   const token = getCookie(request, SESSION_COOKIE);
   if (!token) return null;
