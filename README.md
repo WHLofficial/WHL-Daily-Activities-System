@@ -49,6 +49,8 @@ bash scripts/smoke-test.sh                                # 端到端冒烟（�
 
 ## 部署（首次）
 
+> 保姆级分步指南（含验证点/验收清单/故障排查）见 **[docs/DEPLOY.md](./docs/DEPLOY.md)**，以下为速查版。
+
 1. **创建 D1**：`npx wrangler d1 create whl-guess`，把返回的 `database_id` 填进 `wrangler.toml`（替换 `TODO_REPLACE_WITH_D1_ID`）。
 2. **建表**：`npx wrangler d1 migrations apply whl-guess --remote`。
 3. **Pages**：`npx wrangler pages deploy public`（或接 Git 集成，构建命令留空、输出目录 `public`、Functions 自动识别 `functions/`）。
