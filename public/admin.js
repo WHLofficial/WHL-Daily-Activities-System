@@ -380,7 +380,7 @@ async function doConfirm(d, overrideCap) {
 }
 
 function statusBadge(s) {
-  const m = { pending: ['待发', 'orange'], credited: ['已到账', 'green'], failed: ['失败', 'red'], reversed: ['已冲正', 'gray'] };
+  const m = { pending: ['待发', 'orange'], credited: ['已到账', 'green'], failed: ['失败', 'red'], reversed: ['已冲正', 'gray'], exhausted: ['重试耗尽', 'orange'] };
   const [label, cls] = m[s] || [s, 'gray'];
   return `<span class="badge ${cls}">${label}</span>`;
 }
@@ -431,7 +431,7 @@ document.getElementById('nav-logout').onclick = async () => {
 window.addEventListener('hashchange', route);
 function route() {
   if (!me?.user) { renderLogin(); return; }
-  if (me.user.role === 'user') {
+  if (me.user.role === 'user' && !me.is_initiator) {
     app.innerHTML = '<div class="banner bad">没有管理权限</div>';
     return;
   }

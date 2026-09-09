@@ -66,6 +66,10 @@ export async function creditPayoutItem(env: any, item: any, attempt: number): Pr
   } else if (outcome === 'failed') {
     updateSql = `UPDATE payout_item SET status='failed', last_error=? WHERE id=?`;
     args = [detail, item.id];
+  } else if (attempt >= MAX_RETRY) {
+    // 重试耗尽：停自动重试转人工；批次「重试」按钮可重新拉起（exhausted → pending）
+    updateSql = `UPDATE payout_item SET status='exhausted', last_error=? WHERE id=?`;
+    args = [detail, item.id];
   } else {
     updateSql = `UPDATE payout_item SET retry_count=?, last_error=?, next_retry_at=? WHERE id=?`;
     args = [
@@ -108,7 +112,7 @@ export async function dispatchPending(env: any, batchId?: number) {
   for (const id of ids) {
     const t = (await env.DB.prepare(
       `SELECT COUNT(*) AS n, SUM(CASE WHEN status='credited' THEN 1 ELSE 0 END) AS c,
-              SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) AS f
+              SUM(CASE WHEN status IN ('failed','exhausted') THEN 1 ELSE 0 END) AS f
          FROM payout_item WHERE batch_id = ?`,
     ).bind(id).first()) as any;
     const total = Number(t?.n || 0), creditedN = Number(t?.c || 0), failedN = Number(t?.f || 0);

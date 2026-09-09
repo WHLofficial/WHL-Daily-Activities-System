@@ -4,7 +4,7 @@
 import { HttpError, json, readBody, nowISO } from './_lib/http.ts';
 import {
   hashPassword, verifyPassword, sha256hex, createSession, sessionCookie, clearSessionCookie,
-  getAuthUser, requireUser, requireRole, requireManager, verifyPluginRequest, assertCronKey,
+  getAuthUser, requireUser, requireRole, requireManager, isInitiator, verifyPluginRequest, assertCronKey,
 } from './_lib/auth.ts';
 import { computeSettlement, type ResultInput } from './_lib/judge.ts';
 import { dispatchPending, signAndFetch } from './_lib/sync.ts';
@@ -123,7 +123,13 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
     // ---------- 认证 ----------
     if (method === 'POST' && seg[0] === 'setup') {
       const body = await readBody(request);
-      if (!env.SETUP_TOKEN || body.setupToken !== env.SETUP_TOKEN) throw new HttpError(403, 'setup token 错误');
+      // 常量时间比较，与 cron key / HMAC 同一套写法
+      const got = String(body.setupToken || '');
+      const expect = String(env.SETUP_TOKEN || '');
+      if (!expect || got.length !== expect.length) throw new HttpError(403, 'setup token 错误');
+      let diff = 0;
+      for (let i = 0; i < expect.length; i++) diff |= got.charCodeAt(i) ^ expect.charCodeAt(i);
+      if (diff !== 0) throw new HttpError(403, 'setup token 错误');
       const adminExists = await env.DB.prepare(`SELECT COUNT(*) AS n FROM users WHERE role = 'admin'`).first() as any;
       if (adminExists.n > 0) throw new HttpError(400, '管理员已存在，setup 已关闭');
       if (!body.username || !body.password || String(body.password).length < 6) {
@@ -157,7 +163,9 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       const user = await getAuthUser(env, request);
       if (!user) return json({ user: null });
       const binding = await env.DB.prepare('SELECT qq_id, bound_at FROM user_binding WHERE user_id = ?').bind(user.id).first();
-      return json({ user, binding: binding || null });
+      // 发起人标记：role=user 但在发起人名单内，前端据此放行管理台
+      const isInit = user.role === 'admin' ? true : await isInitiator(env, user.id);
+      return json({ user, binding: binding || null, is_initiator: isInit });
     }
 
     if (method === 'POST' && seg[0] === 'bind' && seg[1] === 'new') {
@@ -333,16 +341,15 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
         const matches: any[] = body.matches || [];
         if (matches.length < 1 || matches.length > 3) throw new HttpError(400, '比赛场次 1~3 场');
 
-        const er = await env.DB.prepare(
-          `INSERT INTO event (title, status, created_by, deadline, reward_cap) VALUES (?, ?, ?, ?, ?)`,
-        ).bind(title, body.openNow ? 'open' : 'draft', user.id, new Date(body.deadline).toISOString(), rewardCap).run();
-        const eid = er.meta.last_row_id;
-
-        for (const m of matches) {
-          const mr = await env.DB.prepare(
-            'INSERT INTO match (event_id, home, away, kickoff) VALUES (?, ?, ?, ?)',
-          ).bind(eid, String(m.home || '').trim() || '主队', String(m.away || '').trim() || '客队', m.kickoff || null).run();
-          const mid = mr.meta.last_row_id;
+        // 先整体校验再落库：任何一项不合法都直接拒绝，不留半成品竞猜期
+        const matchRows: { home: string; away: string; kickoff: any }[] = [];
+        const itemRows: { mi: number; type: string; question: string; tierJson: string; cap: number | null; sort: number }[] = [];
+        matches.forEach((m: any, mi: number) => {
+          matchRows.push({
+            home: String(m.home || '').trim() || '主队',
+            away: String(m.away || '').trim() || '客队',
+            kickoff: m.kickoff || null,
+          });
           const items: any[] = m.items || [];
           if (items.length < 1 || items.length > 6) throw new HttpError(400, '每场比赛 1~6 个玩法项');
           for (let i = 0; i < items.length; i++) {
@@ -350,11 +357,31 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
             const type = String(it.type);
             if (!['score', 'wdl', 'goals', 'fun'].includes(type)) throw new HttpError(400, `未知玩法类型 ${type}`);
             const question = String(it.question || '').trim() || { score: '猜比分', wdl: '胜平负', goals: '总进球数', fun: '趣味题' }[type];
-            await env.DB.prepare(
-              'INSERT INTO play_item (match_id, type, question, tier_json, reward_cap, sort) VALUES (?, ?, ?, ?, ?, ?)',
-            ).bind(mid, type, question, validateTiers(type, it.tiers),
-              it.cap ? Number(it.cap) : null, i).run();
+            itemRows.push({ mi, type, question, tierJson: validateTiers(type, it.tiers), cap: it.cap ? Number(it.cap) : null, sort: i });
           }
+        });
+
+        const er = await env.DB.prepare(
+          `INSERT INTO event (title, status, created_by, deadline, reward_cap) VALUES (?, ?, ?, ?, ?)`,
+        ).bind(title, body.openNow ? 'open' : 'draft', user.id, new Date(body.deadline).toISOString(), rewardCap).run();
+        const eid = er.meta.last_row_id;
+
+        try {
+          const mrs = await env.DB.batch(matchRows.map((m) =>
+            env.DB.prepare('INSERT INTO match (event_id, home, away, kickoff) VALUES (?, ?, ?, ?)')
+              .bind(eid, m.home, m.away, m.kickoff)));
+          const mids = mrs.map((r: any) => r.meta.last_row_id);
+          await env.DB.batch(itemRows.map((ir) =>
+            env.DB.prepare('INSERT INTO play_item (match_id, type, question, tier_json, reward_cap, sort) VALUES (?, ?, ?, ?, ?, ?)')
+              .bind(mids[ir.mi], ir.type, ir.question, ir.tierJson, ir.cap, ir.sort)));
+        } catch (e) {
+          // 落库中途失败（基础设施错误而非校验问题）：清掉已写入部分，不留孤儿期
+          await env.DB.batch([
+            env.DB.prepare('DELETE FROM play_item WHERE match_id IN (SELECT id FROM match WHERE event_id = ?)').bind(eid),
+            env.DB.prepare('DELETE FROM match WHERE event_id = ?').bind(eid),
+            env.DB.prepare('DELETE FROM event WHERE id = ?').bind(eid),
+          ]);
+          throw e;
         }
         return json({ ok: true, eventId: eid });
       }
@@ -539,7 +566,7 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
         const batchId = Number(seg[2]);
         await env.DB.prepare(
           `UPDATE payout_item SET status = 'pending', retry_count = 0, next_retry_at = NULL
-             WHERE batch_id = ? AND status IN ('pending', 'failed')`,
+             WHERE batch_id = ? AND status IN ('pending', 'failed', 'exhausted')`,
         ).bind(batchId).run();
         const summary = await dispatchPending(env, batchId);
         return json({ ok: true, dispatch: summary });
