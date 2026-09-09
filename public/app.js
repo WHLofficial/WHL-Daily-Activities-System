@@ -162,8 +162,7 @@ async function renderDetail(id) {
       predictions.push({ playItemId: itemId, content });
     }
     try {
-      try {
-        await api(`/events/${id}/predictions`, { method: 'PUT', body: { predictions } });
+      await api(`/events/${id}/predictions`, { method: 'PUT', body: { predictions } });
         toast('提交成功，截止前可随时修改');
         renderDetail(id);
       } catch (e2) {

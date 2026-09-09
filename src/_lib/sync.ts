@@ -33,10 +33,11 @@ export async function creditPayoutItem(env: any, item: any, attempt: number): Pr
   const body = {
     payout_id: item.payout_id,
     qq_id: item.qq_id,
-    amount: item.amount,
+    // 契约：amount 负数=冲正；payout_item.amount 因 CHECK>0 恒为正，出站时翻号
+    amount: breakdown.kind === 'reversal' ? -item.amount : item.amount,
     type: breakdown.kind === 'reversal' ? 'reversal' : 'reward',
     event_id: item.event_id,
-    ts: Date.now(),
+    ts: new Date().toISOString(),
   };
   let outcome: Outcome;
   let detail = '';
@@ -45,7 +46,7 @@ export async function creditPayoutItem(env: any, item: any, attempt: number): Pr
     const res = await signAndFetch(env, 'POST', '/sync/credit', body);
     if (res.ok) {
       const j: any = await res.json().catch(() => ({}));
-      outcome = j.result === 'duplicate' ? 'duplicate' : 'credited';
+      outcome = j.duplicate === true ? 'duplicate' : 'credited';
       detail = `HTTP ${res.status} balance=${j.balance ?? '?'}`;
     } else {
       outcome = 'failed';
