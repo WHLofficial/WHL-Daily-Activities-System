@@ -37,6 +37,9 @@ npm install
 #   SYNC_SECRET=testsecret / CRON_SECRET=cronsecret
 #   SYNC_BASE_URL=http://127.0.0.1:9991   ← 指向 mock 或真插件
 npx wrangler d1 migrations apply whl-guess --local   # 初始化本地 D1
+# 播种赛事本地库（共享账号池的账号真源；必须在 dev 启动【前】执行，dev 运行中跑会锁库静默失败）：
+npx wrangler d1 execute whl --local --command "INSERT INTO organization (id,name,allow_open_reg) VALUES (1,'WHL',1) ON CONFLICT(id) DO UPDATE SET allow_open_reg=1"
+npx wrangler d1 execute whl --local --command "INSERT OR IGNORE INTO user (name,password_hash,role) VALUES ('smboss','$(node scripts/gen-tour-hash.mjs secret123)','admin')"
 npx wrangler dev --port 8789                         # 起服务（与 npm run dev 等价）
 
 # 另开两个终端：
