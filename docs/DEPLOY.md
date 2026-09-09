@@ -1,14 +1,13 @@
 # 从零部署指南 · WHL 竞猜系统
 
-> 目标读者：部署人本人。按顺序执行，每步都有 ✅ 验证点。全程约 30 分钟（不含插件开发）。
+> 目标读者：部署人本人。按顺序执行，每步都有 ✅ 验证点。全程约 20 分钟（不含插件开发）。
 >
-> 最终形态：
+> 最终形态（纯 Worker，与赛事系统同构）：
 >
 > | 组件 | 地址 | 说明 |
 > |---|---|---|
 > | 赛事系统 | `whleague.win`（已部署） | 登录真源，cookie 发给全主域 |
-> | 竞猜系统 | `guess.whleague.win` | 本文档部署主体（Pages + D1） |
-> | Cron Worker | `whl-guess-cron`（Workers） | 每 5 分钟重试 + 每日 09:00 对账 |
+> | 竞猜系统 | `guess.whleague.win` | 单个 Worker：静态资源 + API + 内置 cron |
 > | AstrBot 插件 | 腾讯云服务器 | 积分真源，经 Cloudflare Tunnel 暴露 |
 >
 > 前置条件：Cloudflare 账号（`whleague.win` 托管其中）、Node.js ≥ 18、本仓库代码。
@@ -26,24 +25,15 @@ npx wrangler whoami        # ✅ 应显示你的账号
 
 ---
 
-## 二、创建竞猜业务库（D1）
+## 二、创建业务库（D1，亚太区）
 
 ```bash
-npx wrangler d1 create whl-guess
+npx wrangler d1 create whl-guess --location apac
 ```
 
-输出里有 `database_id`（形如 `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`），填进 `wrangler.toml`：
+> `--location apac` 很重要：业务库和用户都在亚太；不指定会默认落在北美，每次查询多一个跨洋往返。
 
-```toml
-[[d1_databases]]
-binding = "DB"
-database_name = "whl-guess"
-database_id = "<替换这里>"
-```
-
-> 文件里另外两个绑定（`TOUR_DB` = 赛事系统 D1、`SESSION_KV` = 赛事系统 KV）的 id 已是真实值，不要动。
-
-建表（远程库）：
+把输出的 `database_id` 填进 `wrangler.jsonc` 的 `DB` binding（`TOUR_DB`/`SESSION_KV` 是赛事系统的资源，勿动），然后建表：
 
 ```bash
 npx wrangler d1 migrations apply whl-guess --remote
@@ -53,62 +43,34 @@ npx wrangler d1 migrations apply whl-guess --remote
 
 ---
 
-## 三、部署竞猜系统（Pages）
+## 三、部署 Worker + 绑定正式域名
 
 ```bash
-npx wrangler pages deploy public
-```
-
-首次执行会询问项目名，用默认 `whl-guess`。完成后得到 `https://whl-guess.pages.dev`。
-
-> 以后更新代码：仍执行这条命令即可（Functions 与 public/ 一起发布）。
-
-### 配置环境变量（secrets）
-
-```bash
-npx wrangler pages secret put SYNC_SECRET     # 与插件共享的 HMAC 密钥，填长随机串
-npx wrangler pages secret put CRON_SECRET     # 内部 cron 通道密钥，另存一份给第四步
-npx wrangler pages secret put SETUP_TOKEN     # 首次初始化管理员用，第六步之后删除
-npx wrangler pages secret put SYNC_BASE_URL   # 插件公网地址，第五步完成前可先填 http://127.0.0.1:9
-```
-
-✅ 验证：浏览器打开 `https://whl-guess.pages.dev`，能看到竞猜首页（用户端）。
-
-### 绑定正式域名
-
-1. Cloudflare Dashboard → Workers & Pages → `whl-guess` → Custom domains → **Add** `guess.whleague.win`。
-2. 等证书签发（几分钟，同账号域名 DNS/证书全自动）。
-
-✅ 验证：`https://guess.whleague.win` 可访问。**以下步骤全部用这个域名**（`*.pages.dev` 在大陆常被 DNS 污染）。
-
----
-
-## 四、部署 Cron Worker
-
-编辑 `cron-worker/wrangler.jsonc`，把 `APP_URL` 改为正式域名：
-
-```jsonc
-"vars": { "APP_URL": "https://guess.whleague.win" }
-```
-
-```bash
-cd cron-worker
 npx wrangler deploy
-npx wrangler secret put CRON_SECRET    # 值与第三步一致
 ```
 
-✅ 验证：
+`wrangler.jsonc` 里已声明 `"routes": [{ "pattern": "guess.whleague.win", "custom_domain": true }]`——deploy 时自动开通该域名的 DNS 与证书（zone 必须在同账号）。首次签发证书需要几分钟。
+
+✅ 验证：`curl https://guess.whleague.win/api/me` 返回 `{"user":null}`（HTTP 200）。
+
+> ⚠️ 不要用 `*.workers.dev` 域名做生产入口——大陆访问普遍不通（DNS 污染），这就是必须绑自定义域的原因。
+
+### 配置 secrets
 
 ```bash
-curl -X POST "https://guess.whleague.win/api/internal/retry" -H "X-Cron-Key: <你的CRON_SECRET>"
-# {"total":0,...} 即通；{"error":"cron key 错误"} 说明 secret 没配对
+npx wrangler secret put SYNC_SECRET     # 与插件共享的 HMAC 密钥，填长随机串
+npx wrangler secret put CRON_SECRET     # 内部接口密钥（手动触发重试/对账用）
+npx wrangler secret put SETUP_TOKEN     # 首次初始化管理员用，第六步之后删除
+npx wrangler secret put SYNC_BASE_URL   # 插件公网地址，第五步完成前可先填 http://127.0.0.1:9
 ```
+
+cron（每 5 分钟重试 + 每日 09:00 对账）已内置在 Worker 里，**没有独立 cron 服务要部署**。
 
 ---
 
-## 五、插件侧（腾讯云 AstrBot 服务器）
+## 四、插件侧（腾讯云 AstrBot 服务器）
 
-### 5.1 暴露插件 HTTP 入口（Cloudflare Tunnel）
+### 4.1 暴露插件 HTTP 入口（Cloudflare Tunnel）
 
 ```bash
 # 服务器上安装 cloudflared 后（已登录 CF 账号）：
@@ -120,7 +82,7 @@ cloudflared tunnel run --url http://127.0.0.1:9991 astrbot     # 9991 = 插件 H
 
 ✅ 验证：本机 `curl https://astrbot.whleague.win/sync/summary` 返回 401（`{"error":"bad sign"}`）——说明入口通了且验签生效。
 
-### 5.2 实现插件同步 API
+### 4.2 实现插件同步 API
 
 按 [astrbot-sync-api.md](./astrbot-sync-api.md) 实现（有 Python 参考实现可抄）：
 
@@ -130,16 +92,16 @@ cloudflared tunnel run --url http://127.0.0.1:9991 astrbot     # 9991 = 插件 H
 完成后回竞猜系统改真地址：
 
 ```bash
-npx wrangler pages secret put SYNC_BASE_URL    # 填 https://astrbot.whleague.win
+npx wrangler secret put SYNC_BASE_URL    # 填 https://astrbot.whleague.win
 ```
 
 ✅ 验证：第六步发奖后积分真到账，即为通。
 
 ---
 
-## 六、首次初始化
+## 五、首次初始化
 
-### 6.1 创建管理员
+### 5.1 创建管理员
 
 ```bash
 curl -X POST "https://guess.whleague.win/api/setup" \
@@ -150,10 +112,10 @@ curl -X POST "https://guess.whleague.win/api/setup" \
 ⚠️ **初始化完成后立刻删掉入口**（重要）：
 
 ```bash
-npx wrangler pages secret delete SETUP_TOKEN
+npx wrangler secret delete SETUP_TOKEN
 ```
 
-### 6.2 共享登录打通检查
+### 5.2 共享登录打通检查
 
 1. 服务器上给赛事系统配 cookie 域（让 cookie 跨子域）：
    ```bash
@@ -164,7 +126,7 @@ npx wrangler pages secret delete SETUP_TOKEN
 3. ✅ 验证：竞猜页右上角直接显示赛事系统的昵称（无需再登录）。
    - 若显示未登录：检查 COOKIE_DOMAIN 是否已配、竞猜是否走 `guess.` 子域、浏览器是否有 `whleague.win` 域下的 `whl_session` cookie。
 
-### 6.3 管理台配置
+### 5.3 管理台配置
 
 `guess.whleague.win/admin.html` 登录管理员，依次确认：
 
@@ -175,7 +137,7 @@ npx wrangler pages secret delete SETUP_TOKEN
 
 ---
 
-## 七、首次实战验收
+## 六、首次实战验收
 
 1. 发起人建一期竞猜（标题/截止/比赛/玩法项），状态改为开放；
 2. 群友在赛事系统登录 → 竞猜页**绑定 QQ**（网页生成绑定码 → QQ 群里向 bot 发码）→ 提交预测（未绑定的账号此时会被 403 拦下并引导去绑定，属预期）；
@@ -185,7 +147,7 @@ npx wrangler pages secret delete SETUP_TOKEN
 
 ---
 
-## 八、日常运维
+## 七、日常运维
 
 | 场景 | 现象 | 处理 |
 |---|---|---|
@@ -196,10 +158,11 @@ npx wrangler pages secret delete SETUP_TOKEN
 
 ---
 
-## 九、故障排查
+## 八、故障排查
 
 - **`wrangler d1 create` 提示未登录** → `npx wrangler login` 重走授权。
-- **Pages 部署后 500** → `npx wrangler pages secret list` 确认四个 secret 都在；本地 `.dev.vars` 只影响本地，不会上生产。
+- **线上 500** → `npx wrangler secret list` 确认四个 secret 都在；本地 `.dev.vars` 只影响本地。
 - **发奖全 unknown 但插件正常** → `SYNC_BASE_URL` 是否漏改/多写了尾斜杠；`SYNC_SECRET` 两端是否一致。
 - **战报不发** → 插件是否在轮询 `pending` 且发送成功后才 `ack`；管理台「战报」可查积压。
-- **共享登录失效** → 按第六步 6.2 的三点排查（COOKIE_DOMAIN / 子域 / cookie 存在性）。
+- **共享登录失效** → 按 5.2 的三点排查（COOKIE_DOMAIN / 子域 / cookie 存在性）。
+- **`wrangler d1 delete` 报错找不到库** → 该命令按 wrangler.jsonc 里的 `database_id` 解析，先把对应 id 填进配置再按名删除。

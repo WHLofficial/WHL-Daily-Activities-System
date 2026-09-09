@@ -9,20 +9,20 @@
 ## 架构
 
 ```
-用户/管理员浏览器 ── Cloudflare Pages（静态 public/ + Functions API + D1）
+用户/管理员浏览器 ── Cloudflare Worker（静态 public/ 资源 + API + D1 + 内置 cron）
 AstrBot 插件 ────── HMAC 轮询 /api/bind/claim、/api/reports/pending、/api/reports/ack
-Cloudflare Pages ── 推送 POST /sync/credit、GET /sync/summary?date= → 插件 HTTP 入口
-cron-worker ─────── 每 5 分钟触发重试通道；每天 09:00（UTC+8）触发对账
+竞猜 Worker ─────── 推送 POST /sync/credit、GET /sync/summary?date= → 插件 HTTP 入口
+内置 cron ────────── 每 5 分钟重试未到账发放项；每天 09:00（UTC+8）对账
 ```
 
 ## 目录
 
 ```
-migrations/0001_init.sql    # 17 张表（D1 schema）
-functions/_lib/             # http/auth/judge/sync/report 工具库
-functions/api/[[path]].ts   # 全部 API 路由
+migrations/                 # 0001 初始 17 表 + 0002 账号打通（tour_id/initiators）
+src/index.ts                # Worker 入口：/api/* → 路由，其余 → 静态资源；scheduled 处理 cron
+src/api.ts                  # 全部 API 路由
+src/_lib/                   # http/auth/judge/sync/report 工具库
 public/                     # 用户端 index.html/app.js + 管理端 admin.html/admin.js
-cron-worker/                # 独立 Cron Worker（薄壳，只打内部接口）
 scripts/smoke-test.sh       # 12 步端到端冒烟测试
 scripts/mock-plugin.js      # 模拟插件 HTTP 服务（联调用）
 docs/astrbot-sync-api.md    # 插件侧对接文档
@@ -36,7 +36,7 @@ npm install
 #   SETUP_TOKEN=testtoken / SYNC_SECRET=testsecret / CRON_SECRET=cronsecret
 #   SYNC_BASE_URL=http://127.0.0.1:9991   ← 指向 mock 或真插件
 npx wrangler d1 migrations apply whl-guess --local   # 初始化本地 D1
-npx wrangler pages dev public --port 8788            # 起服务（首次会拉 wrangler）
+npx wrangler dev --port 8789                         # 起服务（与 npm run dev 等价）
 
 # 另开两个终端：
 SYNC_SECRET=testsecret node scripts/mock-plugin.js 9991   # 模拟插件
@@ -45,28 +45,16 @@ bash scripts/smoke-test.sh                                # 端到端冒烟（�
 
 冒烟脚本覆盖：管理员 setup → 建号 → 建期 → 绑定码认领（含重放拒绝）→ 提交预测 → 截止 → 录比分 → 结算预览（档位/上限）→ 确认发奖 → cron 重试（含错 key 拒绝）→ 每日对账 → 战报拉取 → 数据库核对。
 
-**Windows 注意**：`wrangler dev` 崩溃后常残留 `workerd.exe` 孤儿进程占 8788 端口，重启前先 `taskkill /F /IM workerd.exe`；确认 8788 上无多个 LISTENING 再访问（`netstat -ano | findstr 8788`）。
+**Windows 注意**：`wrangler dev` 崩溃后常残留 `workerd.exe` 孤儿进程，重启前先 `taskkill /F /IM workerd.exe`。本地开发用 8789 端口——8788 被历史僵尸连接污染过会一直挂起。
 
 ## 部署（首次）
 
 > 保姆级分步指南（含验证点/验收清单/故障排查）见 **[docs/DEPLOY.md](./docs/DEPLOY.md)**，以下为速查版。
 
-1. **创建 D1**：`npx wrangler d1 create whl-guess`，把返回的 `database_id` 填进 `wrangler.toml`（替换 `TODO_REPLACE_WITH_D1_ID`）。
+1. **创建 D1**：`npx wrangler d1 create whl-guess --location apac`（亚太区），把 `database_id` 填进 `wrangler.jsonc`。
 2. **建表**：`npx wrangler d1 migrations apply whl-guess --remote`。
-3. **Pages**：`npx wrangler pages deploy public`（或接 Git 集成，构建命令留空、输出目录 `public`、Functions 自动识别 `functions/`）。
-4. **环境变量**（Pages 项目 Settings → Variables，生产值）：
-   - `SYNC_SECRET`：与插件共享的 HMAC 密钥（长随机串）
-   - `SYNC_BASE_URL`：插件公网 HTTP 入口（见下「插件侧」）
-   - `SETUP_TOKEN`：**首次初始化管理员用，初始化完成后从环境变量中删除**（关闭 setup 入口）
-   - `CRON_SECRET`：内部 cron 通道密钥
-5. **Cron Worker**：
-   ```bash
-   cd cron-worker
-   npx wrangler deploy           # wrangler.jsonc 里已声明两条 cron
-   npx wrangler secret put CRON_SECRET   # 值与 Pages 侧一致
-   ```
-   并把 cron-worker 的 `APP_URL`（wrangler.jsonc vars）改为 Pages 生产域名。
-6. **自定义域名**：Pages 项目绑自定义域（大陆可达性，`*.pages.dev` 常被 DNS 污染）。
+3. **部署**：`npx wrangler deploy`——`routes` 里声明的 `guess.whleague.win` 自定义域自动开通（DNS+证书）。
+4. **Secrets**：`npx wrangler secret put SYNC_SECRET / CRON_SECRET / SETUP_TOKEN / SYNC_BASE_URL`（SETUP_TOKEN 初始化完管理员后删除；cron 已内置在 Worker，无独立服务）。
 
 ## 账号体系（已对接赛事系统）
 

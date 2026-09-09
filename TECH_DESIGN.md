@@ -8,7 +8,7 @@
 
 ## 结论先行
 
-- **部署**：CF Pages（前端）+ Pages Functions（后端 API）+ D1（竞猜业务库）；AstrBot 积分插件加同步 API，经 Cloudflare Tunnel 暴露 HTTPS；战报由插件**出站轮询拉取**。
+- **部署**：单个 Cloudflare Worker（静态资源 + API + 内置 cron，与赛事系统同构；D1 建在亚太区）绑 `guess.whleague.win`；AstrBot 积分插件加同步 API，经 Cloudflare Tunnel 暴露 HTTPS；战报由插件**出站轮询拉取**。（2026-09-09 已从 Pages 迁移为纯 Worker，cron 不再需要独立服务）
 - **同步**：余额真源只在 AstrBot；竞猜库只存「应发凭证 + 流水镜像」；每笔资金操作带全局唯一单号（payout_id），插件侧用唯一索引做**防重发最终防线**；Workers 超时重试 + 每日对账兜底。
 
 ## 一、部署架构

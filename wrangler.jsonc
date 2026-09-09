@@ -4,6 +4,10 @@
   "name": "whl-guess",
   "main": "src/index.ts",
   "compatibility_date": "2025-09-01",
+  // 正式域名：zone 在同账号，deploy 时自动开通证书与 DNS（大陆可达性，勿用 *.workers.dev）
+  "routes": [
+    { "pattern": "guess.whleague.win", "custom_domain": true }
+  ],
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
@@ -14,7 +18,7 @@
     {
       "binding": "DB",
       "database_name": "whl-guess",
-      "database_id": "TODO_REPLACE_WITH_D1_ID"
+      "database_id": "8f48bd5e-5d1b-4d62-ba4f-bf9b0cdb09eb"
     },
     // 赛事系统（whl-tournament）的 D1：共享账号只读其 user 表
     {
