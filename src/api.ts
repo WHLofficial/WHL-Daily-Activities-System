@@ -3,7 +3,7 @@
 
 import { HttpError, json, readBody, nowISO } from './_lib/http.ts';
 import {
-  hashPassword, verifyPassword, sha256hex, createSession, sessionCookie, clearSessionCookie,
+  hashPassword, sha256hex, createSession, sessionCookie, clearSessionCookie,
   getAuthUser, requireUser, requireRole, requireManager, isInitiator, verifyPluginRequest, assertCronKey,
   rateLimit, mirrorTourUser,
 } from './_lib/auth.ts';
@@ -201,14 +201,26 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(token) });
     }
 
+    // 登录：验密走赛事系统 user 表（共享账号池，两边注册的账号互通），本地只建会话。
+    // must_change_pw=1 与赛事系统同规则：视为不可登录，需先回赛事系统改密。
     if (method === 'POST' && seg[0] === 'login') {
+      if (!env.TOUR_DB) throw new HttpError(500, '未配置赛事库');
+      const ip = request.headers.get('CF-Connecting-IP') || 'local';
+      if (!(await rateLimit(env, `login-ip:${ip}`, 10, 900))) throw new HttpError(429, '尝试太频繁，请 15 分钟后再来');
       const body = await readBody(request);
-      const user = await env.DB.prepare('SELECT * FROM users WHERE username = ?').bind(String(body.username || '')).first() as any;
-      if (!user || !(await verifyPassword(String(body.password || ''), user.password_salt, user.password_hash))) {
-        throw new HttpError(401, '用户名或密码错误');
+      const name = String(body.username ?? '').trim();
+      if (!name) throw new HttpError(400, '请输入昵称');
+      if (!(await rateLimit(env, `login-name:${name}`, 5, 900))) throw new HttpError(429, '这个账号尝试太频繁，请 15 分钟后再来');
+      const tour = await env.TOUR_DB.prepare(
+        'SELECT id, name, role, locked, must_change_pw, password_hash FROM user WHERE name = ?',
+      ).bind(name).first() as any;
+      if (!tour || !(await tourVerifyPassword(String(body.password ?? ''), tour.password_hash))) {
+        throw new HttpError(401, '昵称或密码不正确');
       }
-      const token = await createSession(env, user.id);
-      return json({ ok: true, role: user.role }, 200, { 'Set-Cookie': sessionCookie(token) });
+      if (tour.must_change_pw === 1) throw new HttpError(403, '该账号需先修改密码，请到比赛系统登录修改');
+      const local = await mirrorTourUser(env, tour);
+      const token = await createSession(env, local.id);
+      return json({ ok: true, role: local.role }, 200, { 'Set-Cookie': sessionCookie(token) });
     }
 
     if (method === 'POST' && seg[0] === 'logout') {
