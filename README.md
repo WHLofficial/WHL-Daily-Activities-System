@@ -5,6 +5,7 @@
 - 产品范围与决策记录：[PRD.md](./PRD.md)
 - 技术方案与失败路径设计：[TECH_DESIGN.md](./TECH_DESIGN.md)
 - 插件对接契约（含 Python 参考实现）：[docs/astrbot-sync-api.md](./docs/astrbot-sync-api.md)
+- 插件开发任务书（可直接交给 Agent）：[docs/PLUGIN_PROMPT.md](./docs/PLUGIN_PROMPT.md)
 
 ## 架构
 
