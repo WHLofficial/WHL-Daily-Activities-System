@@ -5,7 +5,9 @@ import { HttpError, json, readBody, nowISO } from './_lib/http.ts';
 import {
   hashPassword, verifyPassword, sha256hex, createSession, sessionCookie, clearSessionCookie,
   getAuthUser, requireUser, requireRole, requireManager, isInitiator, verifyPluginRequest, assertCronKey,
+  rateLimit, mirrorTourUser,
 } from './_lib/auth.ts';
+import { sha256Hex, tourHashPassword, tourVerifyPassword } from './_lib/tourcrypto.ts';
 import { computeSettlement, type ResultInput } from './_lib/judge.ts';
 import { dispatchPending, signAndFetch } from './_lib/sync.ts';
 import { buildReportText } from './_lib/report.ts';
@@ -121,6 +123,62 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
     }
 
     // ---------- 认证 ----------
+    // 注册：账号真源在赛事系统 user 表（写入即全站通用），校验规则与赛事系统 /register 逐字一致。
+    // 门槛与赛事系统同一套：注册码优先；无码需组织 allow_open_reg 开关放开，产生 locked=1 观众号。
+    if (method === 'POST' && seg[0] === 'register') {
+      if (!env.TOUR_DB) throw new HttpError(500, '未配置赛事库');
+      const ip = request.headers.get('CF-Connecting-IP') || 'local';
+      if (!(await rateLimit(env, `reg:${ip}`, 5, 3600))) throw new HttpError(429, '注册太频繁，请一小时后再试');
+      const body = await readBody(request);
+      const name = String(body.name ?? '').trim();
+      const password = String(body.password ?? '');
+      if (name.length < 1 || name.length > 32) throw new HttpError(400, '昵称需要 1-32 个字符');
+      if (password.length < 8 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
+        throw new HttpError(400, '密码至少 8 位，且要同时包含字母和数字');
+      }
+      const email = String(body.email ?? '').trim() || null;
+      if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new HttpError(400, '邮箱格式不对');
+
+      let locked = 0;
+      const code = String(body.signupCode ?? '').trim();
+      if (code) {
+        const sc = await env.TOUR_DB.prepare(
+          'SELECT id, expires_at, max_uses, used_count FROM signup_code WHERE code_hash = ?',
+        ).bind(await sha256Hex(code)).first() as any;
+        if (!sc) throw new HttpError(400, '注册码无效');
+        if (sc.expires_at && sc.expires_at < nowISO()) throw new HttpError(400, '注册码已过期');
+        if (sc.max_uses !== null && sc.used_count >= sc.max_uses) throw new HttpError(400, '注册码已用完');
+      } else {
+        const org = await env.TOUR_DB.prepare('SELECT allow_open_reg FROM organization WHERE id = 1').first() as any;
+        if (!org?.allow_open_reg) throw new HttpError(400, '需要注册码');
+        locked = 1;
+      }
+
+      const dup = await env.TOUR_DB.prepare('SELECT id FROM user WHERE name = ?').bind(name).first();
+      if (dup) throw new HttpError(409, '这个昵称已被占用');
+
+      if (code) {
+        // 原子核销（与赛事系统同款守卫条件），防并发多用
+        const upd = await env.TOUR_DB.prepare(
+          'UPDATE signup_code SET used_count = used_count + 1 WHERE code_hash = ? AND (max_uses IS NULL OR used_count < max_uses) AND (expires_at IS NULL OR expires_at > ?)',
+        ).bind(await sha256Hex(code), nowISO()).run();
+        if (upd.meta.changes !== 1) throw new HttpError(400, '注册码无效或已用完');
+      }
+
+      let tourId: number;
+      try {
+        const ins = await env.TOUR_DB.prepare(
+          "INSERT INTO user (name, email, password_hash, role, locked) VALUES (?, ?, ?, 'coach', ?)",
+        ).bind(name, email, await tourHashPassword(password), locked).run();
+        tourId = Number(ins.meta.last_row_id);
+      } catch {
+        throw new HttpError(409, '这个昵称已被占用'); // UNIQUE 撞名
+      }
+      const local = await mirrorTourUser(env, { id: tourId, name, role: 'coach' });
+      const token = await createSession(env, local.id);
+      return json({ ok: true, locked: locked === 1 }, 200, { 'Set-Cookie': sessionCookie(token) });
+    }
+
     if (method === 'POST' && seg[0] === 'setup') {
       const body = await readBody(request);
       // 常量时间比较，与 cron key / HMAC 同一套写法

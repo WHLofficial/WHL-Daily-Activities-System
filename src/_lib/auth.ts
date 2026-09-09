@@ -91,7 +91,18 @@ function getCookie(request: Request, name: string): string | null {
 // must_change_pw 视为未登录（需先回赛事系统改密）。
 const TOUR_COOKIE = 'whl_session';
 
-async function mirrorTourUser(env: any, tour: any): Promise<any> {
+// KV 固定窗口限流（与赛事系统 worker/lib/ratelimit.ts 同款；KV 最终一致，窗口边界少量超发对朋友局可接受）
+export async function rateLimit(env: any, key: string, limit: number, windowSec: number): Promise<boolean> {
+  if (!env.SESSION_KV) return true;
+  const bucket = Math.floor(Date.now() / 1000 / windowSec);
+  const k = `rl:${key}:${bucket}`;
+  const cur = Number((await env.SESSION_KV.get(k)) ?? 0);
+  if (cur >= limit) return false;
+  await env.SESSION_KV.put(k, String(cur + 1), { expirationTtl: windowSec });
+  return true;
+}
+
+export async function mirrorTourUser(env: any, tour: any): Promise<any> {
   const role = tour.role === 'admin' || tour.role === 'superadmin' ? 'admin' : 'user';
   // 密码列填空值：赛事系统身份不走本地密码登录（verifyPassword 永不匹配空哈希）
   return env.DB.prepare(
