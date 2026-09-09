@@ -8,7 +8,7 @@ compatibility_date = "2025-09-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "whl-guess"
-database_id = "TODO_REPLACE_WITH_D1_ID"
+database_id = "216410e9-2fad-455e-a086-1e3aab814054"
 
 # 赛事系统（whl-tournament）的 D1：共享账号只读其 user 表
 [[d1_databases]]
