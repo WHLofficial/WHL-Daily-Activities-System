@@ -60,7 +60,6 @@ npx wrangler deploy
 ```bash
 npx wrangler secret put SYNC_SECRET     # 与插件共享的 HMAC 密钥，填长随机串
 npx wrangler secret put CRON_SECRET     # 内部接口密钥（手动触发重试/对账用）
-npx wrangler secret put SETUP_TOKEN     # 首次初始化管理员用，第六步之后删除
 npx wrangler secret put SYNC_BASE_URL   # 插件公网地址，第五步完成前可先填 http://127.0.0.1:9
 ```
 
@@ -101,21 +100,20 @@ npx wrangler secret put SYNC_BASE_URL    # 填 https://astrbot.whleague.win
 
 ## 五、首次初始化
 
-### 5.1 创建管理员
+### 5.1 账号说明（无需 setup）
 
-```bash
-curl -X POST "https://guess.whleague.win/api/setup" \
-  -H "Content-Type: application/json" \
-  -d '{"setupToken":"<你的SETUP_TOKEN>","username":"boss","password":"<管理密码>","displayName":"boss"}'
-```
+竞猜站与赛事系统共享账号池：账号真源在赛事系统 `user` 表，竞猜站有自己的注册/登录页。**没有也不需要 `/api/setup`**——
 
-⚠️ **初始化完成后立刻删掉入口**（重要）：
+- 管理员身份 = 赛事系统的 `admin/superadmin` 账号直接登录竞猜站即得；
+- 普通账号在竞猜站注册页注册（或赛事系统注册后直接登录竞猜站）。
+
+若赛事系统此前配置过 `SETUP_TOKEN`，可删除：
 
 ```bash
 npx wrangler secret delete SETUP_TOKEN
 ```
 
-### 5.2 共享登录打通检查
+### 5.2 共享账号与自动登录检查
 
 1. 服务器上给赛事系统配 cookie 域（让 cookie 跨子域）：
    ```bash
@@ -125,6 +123,7 @@ npx wrangler secret delete SETUP_TOKEN
 2. 浏览器登录 `whleague.win`（赛事系统），然后新标签打开 `guess.whleague.win`。
 3. ✅ 验证：竞猜页右上角直接显示赛事系统的昵称（无需再登录）。
    - 若显示未登录：检查 COOKIE_DOMAIN 是否已配、竞猜是否走 `guess.` 子域、浏览器是否有 `whleague.win` 域下的 `whl_session` cookie。
+4. 再验证独立注册登录：竞猜站退出后用注册页建一个新号（需注册码或赛事系统放开开放注册），确认该账号也能登录赛事系统。
 
 ### 5.3 管理台配置
 
@@ -133,7 +132,7 @@ npx wrangler secret delete SETUP_TOKEN
 - **发起人名单**：把可以开期的管理员/群友勾成发起人（名单外的人看不到管理功能）；
 - **默认档位**（比分 300 / 胜平负 50 / 总进球 100 / 趣味 50）与单场上限，可按需调整。
 
-> 说明：管理员身份来自赛事系统的 `admin/superadmin`；「本站登录」的自建账号仅用于本地开发联调，线上不用管。
+> 说明：管理员身份来自赛事系统的 `admin/superadmin`，用该账号登录竞猜管理台即可。
 
 ---
 

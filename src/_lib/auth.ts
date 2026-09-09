@@ -1,4 +1,4 @@
-// 认证与会话（B1 退路：自建账号密码；对接赛事系统时替换 getAuthUser 的实现）
+// 认证与会话（共享账号池：账号真源在赛事系统 D1 user 表，本地 users 表只是镜像锚点）
 // 插件方向请求用 HMAC-SHA256 签名验证（SYNC_SECRET 共享密钥）。
 
 import { HttpError } from './http.ts';
@@ -25,29 +25,6 @@ async function hmac(secret: string, canonical: string): Promise<string> {
     { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
   );
   return toHex(await crypto.subtle.sign('HMAC', key, enc.encode(canonical)));
-}
-
-// ---- 密码（PBKDF2-SHA256, 100k 迭代）----
-
-export async function hashPassword(password: string): Promise<{ salt: string; hash: string }> {
-  const salt = randomHex(16);
-  const key = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', salt: enc.encode(salt), iterations: 100_000, hash: 'SHA-256' }, key, 256,
-  );
-  return { salt, hash: toHex(bits) };
-}
-
-export async function verifyPassword(password: string, salt: string, expected: string): Promise<boolean> {
-  const key = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', salt: enc.encode(salt), iterations: 100_000, hash: 'SHA-256' }, key, 256,
-  );
-  const got = toHex(bits);
-  if (got.length !== expected.length) return false;
-  let diff = 0;
-  for (let i = 0; i < got.length; i++) diff |= got.charCodeAt(i) ^ expected.charCodeAt(i);
-  return diff === 0;
 }
 
 // ---- 会话 ----
@@ -80,13 +57,13 @@ function getCookie(request: Request, name: string): string | null {
   return null;
 }
 
-// TODO(B1)：对接赛事系统时，在此处校验共享登录 cookie 并映射到 users.external_id；
-// 自建会话为 TECH_DESIGN 第四节约定的退路实现。
-// ---- 赛事系统共享会话（B1 主通道）----
-// 赛事系统发 whl_session（HttpOnly，域属性由其 COOKIE_DOMAIN 决定），会话真源在其 KV：
-//   sess:<token> -> {"userId":n}；用户表在其 D1 `whl` 库 user 表。
-// 本库只存镜像（users.tour_id 唯一键）。角色映射：
-//   admin/superadmin -> admin；coach（含 locked=1 的观众号）-> user。
+// ---- 赛事系统共享账号池 ----
+// 账号真源在赛事系统 D1 `whl` 库 user 表；本地只存镜像（users.tour_id 唯一键）。
+// 注册/登录/改密直接读写赛事库（见 api.ts），密码哈希用 tourcrypto.ts 的赛事兼容格式，
+// 两边任一站点注册/改密的账号在所有站点都能登录。
+// 另有赛事系统发的 whl_session（HttpOnly，域属性由其 COOKIE_DOMAIN 决定），会话真源在其 KV：
+//   sess:<token> -> {"userId":n}。已登录比赛平台的用户打开竞猜站自动镜像登录。
+// 角色映射：admin/superadmin -> admin；coach（含 locked=1 的观众号）-> user。
 // locked 是赛事系统「未解锁绑队」的观众号，不是封禁 —— 放行；
 // must_change_pw 视为未登录（需先回赛事系统改密）。
 const TOUR_COOKIE = 'whl_session';
@@ -104,12 +81,12 @@ export async function rateLimit(env: any, key: string, limit: number, windowSec:
 
 export async function mirrorTourUser(env: any, tour: any): Promise<any> {
   const role = tour.role === 'admin' || tour.role === 'superadmin' ? 'admin' : 'user';
-  // 密码列填空值：赛事系统身份不走本地密码登录（verifyPassword 永不匹配空哈希）
+  // 密码列填空值：本地镜像不走本地密码登录（登录验密只查赛事库）
   return env.DB.prepare(
     `INSERT INTO users (tour_id, username, display_name, role, password_salt, password_hash)
        VALUES (?, ?, ?, ?, '', '')
        ON CONFLICT(tour_id) DO UPDATE SET display_name = excluded.display_name, role = excluded.role
-     RETURNING id, username, display_name, role`,
+     RETURNING id, tour_id, username, display_name, role`,
   ).bind(tour.id, tour.name, tour.name, role).first();
 }
 
@@ -138,7 +115,7 @@ export async function getAuthUser(env: any, request: Request): Promise<any | nul
   const token = getCookie(request, SESSION_COOKIE);
   if (!token) return null;
   return env.DB.prepare(
-    `SELECT u.id, u.username, u.display_name, u.role
+    `SELECT u.id, u.tour_id, u.username, u.display_name, u.role
        FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = ? AND s.expires_at > ?`,
   ).bind(await sha256hex(token), new Date().toISOString()).first();

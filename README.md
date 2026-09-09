@@ -34,7 +34,7 @@ docs/astrbot-sync-api.md    # 插件侧对接文档
 ```bash
 npm install
 # .dev.vars（本地环境变量，已 gitignore，测试值可自定）：
-#   SETUP_TOKEN=testtoken / SYNC_SECRET=testsecret / CRON_SECRET=cronsecret
+#   SYNC_SECRET=testsecret / CRON_SECRET=cronsecret
 #   SYNC_BASE_URL=http://127.0.0.1:9991   ← 指向 mock 或真插件
 npx wrangler d1 migrations apply whl-guess --local   # 初始化本地 D1
 npx wrangler dev --port 8789                         # 起服务（与 npm run dev 等价）
@@ -44,7 +44,7 @@ SYNC_SECRET=testsecret node scripts/mock-plugin.js 9991   # 模拟插件
 bash scripts/smoke-test.sh                                # 端到端冒烟（跑完人工核对输出）
 ```
 
-冒烟脚本覆盖：管理员 setup → 建号 → 建期 → 绑定码认领（含重放拒绝）→ 提交预测 → 截止 → 录比分 → 结算预览（档位/上限）→ 确认发奖 → cron 重试（含错 key 拒绝）→ 每日对账 → 战报拉取 → 数据库核对。
+冒烟脚本覆盖：播种赛事库（开放注册+管理员）→ 竞猜注册（开放注册路径）→ 登录 → 建期 → 绑定码认领（含重放拒绝）→ 提交预测 → 截止 → 录比分 → 结算预览（档位/上限）→ 确认发奖 → cron 重试（含错 key 拒绝）→ 每日对账 → 战报拉取 → 数据库核对。
 
 **Windows 注意**：`wrangler dev` 崩溃后常残留 `workerd.exe` 孤儿进程，重启前先 `taskkill /F /IM workerd.exe`。本地开发用 8789 端口——8788 被历史僵尸连接污染过会一直挂起。
 
@@ -55,16 +55,18 @@ bash scripts/smoke-test.sh                                # 端到端冒烟（�
 1. **创建 D1**：`npx wrangler d1 create whl-guess --location apac`（亚太区），把 `database_id` 填进 `wrangler.jsonc`。
 2. **建表**：`npx wrangler d1 migrations apply whl-guess --remote`。
 3. **部署**：`npx wrangler deploy`——`routes` 里声明的 `guess.whleague.win` 自定义域自动开通（DNS+证书）。
-4. **Secrets**：`npx wrangler secret put SYNC_SECRET / CRON_SECRET / SETUP_TOKEN / SYNC_BASE_URL`（SETUP_TOKEN 初始化完管理员后删除；cron 已内置在 Worker，无独立服务）。
+4. **Secrets**：`npx wrangler secret put SYNC_SECRET / CRON_SECRET / SYNC_BASE_URL`（cron 已内置在 Worker，无独立服务）。
 
-## 账号体系（已对接赛事系统）
+## 账号体系（共享账号池）
 
-- 竞猜系统**不重做注册登录**：跨项目绑定赛事系统的 KV（`SESSION_KV`）与 D1（`TOUR_DB`），读 `whl_session` cookie 验证身份，用户镜像进本库（`users.tour_id`）。
+- **账号真源在赛事系统 D1 `user` 表**：竞猜站有自己的注册/登录页（`POST /api/register` / `/api/login`），直接读写赛事库——在竞猜站注册的账号在赛事系统同样能登录，反之亦然。密码哈希为赛事兼容格式（`src/_lib/tourcrypto.ts`，与赛事系统 `worker/lib/crypto.ts` 一致）。
+- 附加便利：已登录比赛平台的用户打开竞猜站自动登录——跨项目绑定赛事系统 KV（`SESSION_KV`）读其 `whl_session` cookie，用户镜像进本库（`users.tour_id`）。
+- 注册门槛与赛事系统同一套：注册码在赛事系统管理台生成，两站通用；无码注册需赛事系统组织开关 `allow_open_reg` 放开，产生 locked 观众号。
 - 角色映射：赛事 `admin/superadmin` → 竞猜管理员；`coach`（含观众号）→ 普通用户；发起人是本库 `initiators` 名单，管理员在「发起人名单」里勾选。
+- 改密两站通用：`POST /api/password` 写回赛事库；`must_change_pw` 账号两站都视为不可登录，需回赛事系统改密。
 - **提交预测前必须绑定 QQ**（未绑定提交返回 403 并引导到绑定页）；绑定码流程见插件对接文档。
 - 主域名 `whleague.win`：竞猜绑 `guess.whleague.win`，赛事系统在 `whleague.win`（或其子域）。
 - 赛事系统侧执行 `npx wrangler secret put COOKIE_DOMAIN` 填 `.whleague.win`（用 secret 而非 vars：`wrangler deploy` 会覆盖 dashboard vars），cookie 即跨子域生效。
-- 本地开发两端口不共享 cookie，用保留的自建账号登录联调（管理员 setup 流程不变）。
 
 ## 插件侧（AstrBot）
 
@@ -81,5 +83,5 @@ bash scripts/smoke-test.sh                                # 端到端冒烟（�
 ## 安全边界
 
 - 全系统无真钱、无充值/提现/实物兑换入口（把竞猜变成赌博的唯一开关，永远不加）。
-- API 密钥只在服务端环境变量；密码 PBKDF2-SHA256（10 万次迭代）；会话 cookie 仅存 token 哈希。
+- API 密钥只在服务端环境变量；密码 PBKDF2-SHA256（与赛事系统一致的 25k 次迭代单串格式）；会话 cookie 仅存 token 哈希。
 - 插件/内部通道全部 HMAC（±300s 窗口）+ 常量时间比对。

@@ -3,7 +3,7 @@
 
 import { HttpError, json, readBody, nowISO } from './_lib/http.ts';
 import {
-  hashPassword, sha256hex, createSession, sessionCookie, clearSessionCookie,
+  sha256hex, createSession, sessionCookie, clearSessionCookie,
   getAuthUser, requireUser, requireRole, requireManager, isInitiator, verifyPluginRequest, assertCronKey,
   rateLimit, mirrorTourUser,
 } from './_lib/auth.ts';
@@ -179,26 +179,25 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       return json({ ok: true, locked: locked === 1 }, 200, { 'Set-Cookie': sessionCookie(token) });
     }
 
-    if (method === 'POST' && seg[0] === 'setup') {
+    // 改密：写回赛事系统 user 表（共享账号池），两边任一站改密全站生效
+    if (method === 'POST' && seg[0] === 'password') {
+      const user = await requireUser(env, request);
+      if (!env.TOUR_DB) throw new HttpError(500, '未配置赛事库');
+      if (!user.tour_id) throw new HttpError(400, '当前账号未关联赛事系统身份');
       const body = await readBody(request);
-      // 常量时间比较，与 cron key / HMAC 同一套写法
-      const got = String(body.setupToken || '');
-      const expect = String(env.SETUP_TOKEN || '');
-      if (!expect || got.length !== expect.length) throw new HttpError(403, 'setup token 错误');
-      let diff = 0;
-      for (let i = 0; i < expect.length; i++) diff |= got.charCodeAt(i) ^ expect.charCodeAt(i);
-      if (diff !== 0) throw new HttpError(403, 'setup token 错误');
-      const adminExists = await env.DB.prepare(`SELECT COUNT(*) AS n FROM users WHERE role = 'admin'`).first() as any;
-      if (adminExists.n > 0) throw new HttpError(400, '管理员已存在，setup 已关闭');
-      if (!body.username || !body.password || String(body.password).length < 6) {
-        throw new HttpError(400, '用户名/密码不合法（密码至少 6 位）');
+      const newPassword = String(body.newPassword ?? '');
+      if (newPassword.length < 8 || !/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
+        throw new HttpError(400, '密码至少 8 位，且要同时包含字母和数字');
       }
-      const { salt, hash } = await hashPassword(String(body.password));
-      const r = await env.DB.prepare(
-        `INSERT INTO users (username, display_name, password_salt, password_hash, role) VALUES (?, ?, ?, ?, 'admin')`,
-      ).bind(String(body.username), String(body.displayName || body.username), salt, hash).run();
-      const token = await createSession(env, r.meta.last_row_id);
-      return json({ ok: true }, 200, { 'Set-Cookie': sessionCookie(token) });
+      const row = await env.TOUR_DB.prepare('SELECT password_hash FROM user WHERE id = ?')
+        .bind(user.tour_id).first() as any;
+      if (!row) throw new HttpError(404, '赛事系统账号不存在');
+      if (!(await tourVerifyPassword(String(body.oldPassword ?? ''), row.password_hash))) {
+        throw new HttpError(401, '当前密码不正确');
+      }
+      await env.TOUR_DB.prepare('UPDATE user SET password_hash = ?, must_change_pw = 0 WHERE id = ?')
+        .bind(await tourHashPassword(newPassword), user.tour_id).run();
+      return json({ ok: true });
     }
 
     // 登录：验密走赛事系统 user 表（共享账号池，两边注册的账号互通），本地只建会话。

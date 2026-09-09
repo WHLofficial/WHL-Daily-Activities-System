@@ -134,9 +134,11 @@ GET  /sync/summary?date=   （按人汇总，对账用）
 
 ## 四、身份打通（已实现，2026-09-08）
 
-- **登录（主通道）**：竞猜跨项目绑定赛事系统的 KV（会话真源 `sess:<token>`）与 D1 `whl` 库（user 表），收到请求读 `whl_session` cookie → KV 取 userId → 查 user 表 → 角色映射后镜像进本库 `users`（`tour_id` 唯一键，upsert）。赛事系统仅需把 cookie 的 Domain 设为主域根（`COOKIE_DOMAIN` secret = `.whleague.win`，可选；不设则 host-only，仅同主机名共享）。
-- **角色映射**：赛事 `admin/superadmin` → 竞猜 `admin`；`coach`（含 locked=1 的观众号）→ 竞猜 `user`（locked 是「未解锁绑队」的观众，放行）；`must_change_pw=1` 视为未登录。发起人不进角色体系，用本库 `initiators` 名单表，管理员在后台勾选。
-- **登录（退路，dev 用）**：自建账号密码会话保留——本地两端口域名不共享 cookie，用自建登录联调；生产以共享会话为准。
+- **共享账号池（2026-09-08 起，替代早期「仅 cookie 互通」方案）**：账号真源 = 赛事系统 D1 `whl` 库 `user` 表。竞猜站自带注册/登录（`POST /api/register` / `POST /api/login`），直接读写赛事库；密码哈希为赛事兼容格式（`src/_lib/tourcrypto.ts` ↔ 赛事系统 `worker/lib/crypto.ts`，`pbkdf2$iter$salt_b64$hash_b64` 单串）——任一站注册/改密的账号全系列站点通用。注册门槛复用赛事系统：注册码（`signup_code` 表，原子核销）或组织 `allow_open_reg` 开关（无码注册 = locked 观众号）；竞猜站注册的角色只会是 coach，绝不产出 admin。改密 `POST /api/password` 写回赛事库并清 `must_change_pw`。
+- **自动登录（附加通道）**：竞猜跨项目绑定赛事系统的 KV（会话真源 `sess:<token>`）与 D1 `whl` 库，收到请求读 `whl_session` cookie → KV 取 userId → 查 user 表 → 镜像进本库 `users`（`tour_id` 唯一键，upsert）。赛事系统仅需把 cookie 的 Domain 设为主域根（`COOKIE_DOMAIN` secret = `.whleague.win`，可选；不设则 host-only）。
+- **角色映射**：赛事 `admin/superadmin` → 竞猜 `admin`；`coach`（含 locked=1 的观众号）→ 竞猜 `user`（locked 是「未解锁绑队」的观众，放行）；`must_change_pw=1` 视为未登录（需回赛事系统改密）。发起人不进角色体系，用本库 `initiators` 名单表，管理员在后台勾选。
+- **注册/登录限流**：KV 固定窗口（与赛事系统同款）：注册 IP 5 次/时；登录 IP 10 次/15 分 + 账号 5 次/15 分。
+- 本地 `users.password_salt/password_hash` 列保留但不再使用（镜像行填空串）；旧自建账号（boss 等）已弃用。
 - **QQ 认证前置**：提交预测必须已绑定 QQ（`PUT /predictions` 无 `user_binding` 行返回 403 `need_binding`，前端跳绑定页）；观众（locked coach）与 coach 同权可猜。
 - **QQ 映射**：网页点「获取绑定码」→ 生成一次性码（10 分钟有效）→ 用户在群里向 bot 发「绑定 123456」→ 插件**出站**调竞猜 `POST /api/bind/claim {code, qq_id}` 完成映射。出站方向在国内最稳，竞猜侧无需额外暴露端口。
 - `user_binding.qq_id` 唯一 → 一个 QQ 号只能绑一个账号，天然防多号。
