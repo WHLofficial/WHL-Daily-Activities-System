@@ -39,31 +39,10 @@ async function renderEvents() {
         <div class="muted">截止 ${fmtTime(e.deadline)}${e.status === 'open' ? `（${countdown(e.deadline)}）` : ''} · ${e.participants} 人参与</div>
       </a>`).join('')}</div>
     <details class="card" style="margin-top:16px">
-      <summary style="cursor:pointer;font-weight:600">➕ 创建用户账号（发给他们登录用）</summary>
-      <label class="field"><span>用户名（字母数字下划线）</span><input id="su-u" placeholder="如 xiaowang"></label>
-      <label class="field"><span>昵称（战报里显示）</span><input id="su-n" placeholder="如 小王"></label>
-      <label class="field"><span>初始密码（至少 6 位）</span><input id="su-p" placeholder="让对方登录后自行记忆"></label>
-      <label class="field"><span>角色</span><select id="su-r"><option value="user">群友</option><option value="initiator">发起人</option></select></label>
-      <div class="row" style="margin-top:10px"><button id="su-go" style="flex:1">创建账号</button></div>
-    </details>
-    <details class="card" style="margin-top:12px">
       <summary style="cursor:pointer;font-weight:600">🎯 发起人名单（可开期/截止/录比分/结算）</summary>
       <div id="init-list"><div class="muted">加载中…</div></div>
     </details>`;
   document.getElementById('new').onclick = () => { location.hash = '#/new'; };
-  const su = document.getElementById('su-go');
-  if (su) su.onclick = async () => {
-    try {
-      await api('/admin/users', {
-        method: 'POST',
-        body: {
-          username: v('su-u'), password: v('su-p'),
-          displayName: v('su-n'), role: document.getElementById('su-r').value,
-        },
-      });
-      toast(`账号 ${v('su-u')} 已创建，把用户名密码发给对方即可`);
-    } catch (e) { toast(e.message, true); }
-  };
   const initBox = document.getElementById('init-list');
   if (initBox) {
     try {

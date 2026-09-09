@@ -4,19 +4,33 @@ import { api, fmtTime, countdown, STATUS_LABEL, STATUS_CLASS, esc, toast } from 
 const app = document.getElementById('app');
 let me = null; // { user, binding }
 
-// ---------- 登录 ----------
-function renderLogin() {
+// ---------- 登录 / 注册 ----------
+function renderLogin(mode = 'login') {
+  const reg = mode === 'register';
   app.innerHTML = `
     <div class="card" style="margin-top:40px">
-      <h3>登录</h3>
-      <div class="muted">使用群内统一的竞猜账号</div>
-      <label class="field"><span>用户名</span><input id="li-u" autocomplete="username"></label>
-      <label class="field"><span>密码</span><input id="li-p" type="password" autocomplete="current-password"></label>
-      <div class="row" style="margin-top:16px"><button id="li-go" style="flex:1">登 录</button></div>
+      <h3>${reg ? '注册' : '登录'}</h3>
+      <div class="muted">账号与比赛系统通用，任一站注册均可</div>
+      <label class="field"><span>昵称</span><input id="li-u" autocomplete="username"></label>
+      <label class="field"><span>密码</span><input id="li-p" type="password" autocomplete="${reg ? 'new-password' : 'current-password'}"></label>
+      ${reg ? `
+      <label class="field"><span>邮箱（选填）</span><input id="li-e" type="email"></label>
+      <label class="field"><span>注册码（选填）</span><input id="li-c" placeholder="没有的话需要比赛系统放开开放注册"></label>` : ''}
+      <div class="row" style="margin-top:16px"><button id="li-go" style="flex:1">${reg ? '注 册' : '登 录'}</button></div>
+      <div class="muted" style="margin-top:10px;text-align:center">${reg ? '已有账号？' : '没有账号？'}<a href="#" id="li-sw">${reg ? '去登录' : '注册一个'}</a></div>
     </div>`;
+  document.getElementById('li-sw').onclick = (e) => { e.preventDefault(); renderLogin(reg ? 'login' : 'register'); };
   const go = async () => {
     try {
-      await api('/login', { method: 'POST', body: { username: v('li-u'), password: v('li-p') } });
+      if (reg) {
+        await api('/register', {
+          method: 'POST',
+          body: { name: v('li-u'), password: v('li-p'), email: v('li-e'), signupCode: v('li-c') },
+        });
+        toast('注册成功，已自动登录');
+      } else {
+        await api('/login', { method: 'POST', body: { username: v('li-u'), password: v('li-p') } });
+      }
       await loadMe(); route();
     } catch (e) { toast(e.message, true); }
   };

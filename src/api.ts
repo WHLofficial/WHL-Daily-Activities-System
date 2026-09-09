@@ -344,21 +344,6 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
         return json({ tiers: JSON.parse(s.default_tiers || '{}'), rewardCap: Number(s.reward_cap_default || 1000) });
       }
 
-      // 管理员创建账号（B1 对接赛事系统前的过渡入口）
-      if (method === 'POST' && seg[1] === 'users' && seg.length === 2) {
-        if (user.role !== 'admin') throw new HttpError(403, '仅管理员可创建账号');
-        const body = await readBody(request);
-        const username = String(body.username || '').trim();
-        if (!/^[a-zA-Z0-9_]{2,20}$/.test(username)) throw new HttpError(400, '用户名 2~20 位字母数字下划线');
-        if (!body.password || String(body.password).length < 6) throw new HttpError(400, '密码至少 6 位');
-        const role = ['user', 'initiator'].includes(body.role) ? body.role : 'user';
-        const { salt, hash } = await hashPassword(String(body.password));
-        const r = await env.DB.prepare(
-          `INSERT INTO users (username, display_name, password_salt, password_hash, role) VALUES (?, ?, ?, ?, ?)`,
-        ).bind(username, String(body.displayName || username), salt, hash, role).run();
-        return json({ ok: true, userId: r.meta.last_row_id });
-      }
-
       // 账号列表（含赛事系统镜像标记与发起人状态）
       if (method === 'GET' && seg[1] === 'users' && seg.length === 2) {
         if (user.role !== 'admin') throw new HttpError(403, '仅管理员可查看账号');
