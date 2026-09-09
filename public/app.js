@@ -15,7 +15,7 @@ function renderLogin(mode = 'login') {
       <label class="field"><span>密码</span><input id="li-p" type="password" autocomplete="${reg ? 'new-password' : 'current-password'}"></label>
       ${reg ? `
       <label class="field"><span>邮箱（选填）</span><input id="li-e" type="email"></label>
-      <label class="field"><span>注册码（选填）</span><input id="li-c" placeholder="没有的话需要比赛系统放开开放注册"></label>` : ''}
+      <label class="field"><span>注册码（选填）</span><input id="li-c"></label>` : ''}
       <div class="row" style="margin-top:16px"><button id="li-go" style="flex:1">${reg ? '注 册' : '登 录'}</button></div>
       <div class="muted" style="margin-top:10px;text-align:center">${reg ? '已有账号？' : '没有账号？'}<a href="#" id="li-sw">${reg ? '去登录' : '注册一个'}</a></div>
     </div>`;
