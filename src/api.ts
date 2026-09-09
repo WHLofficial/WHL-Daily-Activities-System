@@ -1,14 +1,14 @@
 // 全部 API 路由（Pages Functions catch-all）
 // 分组：认证/绑定（用户）· 插件方向（HMAC）· 竞猜（用户）· 管理 · 内部（cron）
 
-import { HttpError, json, readBody, nowISO } from '../_lib/http.ts';
+import { HttpError, json, readBody, nowISO } from './_lib/http.ts';
 import {
   hashPassword, verifyPassword, sha256hex, createSession, sessionCookie, clearSessionCookie,
   getAuthUser, requireUser, requireRole, requireManager, verifyPluginRequest, assertCronKey,
-} from '../_lib/auth.ts';
-import { computeSettlement, type ResultInput } from '../_lib/judge.ts';
-import { dispatchPending, signAndFetch } from '../_lib/sync.ts';
-import { buildReportText } from '../_lib/report.ts';
+} from './_lib/auth.ts';
+import { computeSettlement, type ResultInput } from './_lib/judge.ts';
+import { dispatchPending, signAndFetch } from './_lib/sync.ts';
+import { buildReportText } from './_lib/report.ts';
 
 function uuid(): string {
   return crypto.randomUUID();
@@ -62,7 +62,7 @@ function validateTiers(type: string, tiers: any): string {
 
 // ---- 路由 ----
 
-export async function onRequest(ctx: any): Promise<Response> {
+export async function handleApi(ctx: { request: Request; env: any }): Promise<Response> {
   const { request, env } = ctx;
   const url = new URL(request.url);
   const seg = url.pathname.replace(/^\/api\/?/, '').split('/').filter(Boolean);
@@ -606,7 +606,8 @@ function shanghaiDate(d: Date): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(d); // YYYY-MM-DD
 }
 
-async function runRecon(env: any, target: string) {
+export async function runRecon(env: any, target?: string) {
+  target = target || shanghaiDate(new Date(Date.now() - 86400_000));
   const expectRows = (await env.DB.prepare(
     `SELECT qq_id, SUM(amount) AS total, COUNT(*) AS n FROM ledger_mirror
       WHERE date(mirrored_at, '+8 hours') = ? GROUP BY qq_id`,

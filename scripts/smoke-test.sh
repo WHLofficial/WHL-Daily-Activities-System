@@ -4,7 +4,7 @@
 #       dev 服务已起（npx wrangler pages dev public，.dev.vars 提供测试密钥）
 # 验证：建号→开盘→HMAC 绑定→提交预测→截止→录结果→结算→确认发奖（发往不可达地址→unknown）→cron 重试→对账
 set -e
-BASE="${BASE:-http://127.0.0.1:8788}"
+BASE="http://127.0.0.1:8789"
 SECRET="${SYNC_SECRET:-testsecret}"
 TOKEN="${SETUP_TOKEN:-testtoken}"
 CRON="${CRON_SECRET:-cronsecret}"
