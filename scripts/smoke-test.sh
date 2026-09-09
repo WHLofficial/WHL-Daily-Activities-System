@@ -23,6 +23,17 @@ claim() { # 一次性绑定码 -> HMAC 调 bind/claim（与 docs/astrbot-sync-ap
   ' "$1" "$2" "$SECRET" "$BASE"
 }
 
+say "0a. 前端 JS 语法检查（node --check 对模块语法不可靠，改用 import() 捕 SyntaxError）"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+for f in core app admin; do
+  node -e "
+    const { pathToFileURL } = require('url');
+    import(pathToFileURL(process.argv[1]).href)
+      .then(() => console.log('  $f.js: parse ok'))
+      .catch(e => { if (e instanceof SyntaxError) { console.error('  $f.js: SYNTAX ERROR: ' + e.message); process.exit(1); } console.log('  $f.js: parse ok（DOM 引用跳过执行）'); })
+  " "$ROOT/public/$f.js" || exit 1
+done
+
 say "0. /api/me 未登录"
 curl -sf "$BASE/api/me"; echo
 
