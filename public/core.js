@@ -10,7 +10,7 @@ export async function api(path, { method = 'GET', body } = {}) {
   let data = {};
   try { data = await res.json(); } catch { /* 空响应 */ }
   if (!res.ok) {
-    const err = new Error(data.message || data.error || `请求失败 (${res.status})`);
+    const err = new Error(data.message || data.error || `请求失败（${res.status}）`);
     err.code = data.error;
     err.data = data;
     throw err;
@@ -41,6 +41,38 @@ export const STATUS_LABEL = {
 export const STATUS_CLASS = {
   draft: 'gray', open: 'green', sealed: 'orange', settled: 'blue', paid: 'purple', archived: 'gray',
 };
+
+// 题型与档位：全站唯一来源，防止各视图各叫一套
+export const TYPE_NAME = { score: '猜比分', wdl: '胜平负', goals: '总进球', fun: '趣味题' };
+export const TIER_LABEL = { score: '比分全中', goals: '总进球', wdl: '胜平负', fun: '趣味命中' };
+
+// 角色名与身份徽章：管理员（赛事系统管理员）/ 发起人 / 普通用户
+export const ROLE_NAME = { admin: '管理员', superadmin: '管理员', coach: '普通用户', user: '普通用户' };
+export function roleLabel(user, isInitiator) {
+  if (!user) return '';
+  if (user.role === 'admin' || user.role === 'superadmin') return '管理员';
+  return isInitiator ? '发起人' : '普通用户';
+}
+
+// 发放批次与发放项状态
+export const BATCH_STATUS = {
+  pending: ['待发', 'gray'], partial: ['部分到账', 'orange'], paid: ['已全部到账', 'green'],
+};
+export const PAYOUT_STATUS = {
+  pending: ['待发', 'orange'], credited: ['已到账', 'green'], failed: ['失败', 'red'],
+  reversed: ['已冲正', 'gray'], exhausted: ['重试耗尽', 'orange'],
+};
+export function statusPill(map, s) {
+  const [label, cls] = map[s] || [s, 'gray'];
+  return `<span class="badge ${cls}">${label}</span>`;
+}
+
+export function formatContent(type, c) {
+  if (type === 'score') return `${c.home}:${c.away}`;
+  if (type === 'wdl') return { home: '主胜', draw: '平', away: '客胜' }[c] || c;
+  if (type === 'goals') return `${c} 球`;
+  return String(c);
+}
 
 export function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({

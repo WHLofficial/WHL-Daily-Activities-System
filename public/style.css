@@ -73,6 +73,14 @@ a.card:hover { border-color: #c9d3e8; }
 .spread { justify-content: space-between; }
 .grow { flex: 1; }
 .empty { text-align: center; color: var(--sub); padding: 40px 0; }
+.center { text-align: center; }
+.mt-s { margin-top: 8px; }
+.card.auth-card { max-width: 380px; margin: 40px auto 0; border-top: 3px solid var(--brand); }
+details.card summary { cursor: pointer; font-weight: 600; }
+.tier-boxes .field { margin: 0; }
+.type-select { width: 110px; }
+.item .q .muted { font-weight: 400; }
+.item label.row { margin: 4px 0; }
 
 /* ---------- 徽章 ---------- */
 .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
