@@ -61,17 +61,32 @@ curl -s -X POST "$BASE/api/register" -H 'Content-Type: application/json' -d '{"n
 
 say "3. 创建竞猜（1 场 4 项，立即开放）"
 DEADLINE=$(node -e "console.log(new Date(Date.now()+3600e3).toISOString())")
-CREATE=$(curl -sf -b "$J" -X POST "$BASE/api/admin/events" -H 'Content-Type: application/json' -d "{
-  \"title\":\"英超第3轮\", \"deadline\":\"$DEADLINE\", \"rewardCap\":1000, \"openNow\":true,
-  \"matches\":[{\"home\":\"阿森纳\",\"away\":\"切尔西\",\"items\":[
-    {\"type\":\"score\",\"tiers\":{\"score\":300,\"goals\":100,\"wdl\":50}},
-    {\"type\":\"wdl\",\"tiers\":{\"wdl\":50}},
-    {\"type\":\"goals\",\"tiers\":{\"goals\":100}},
-    {\"type\":\"fun\",\"question\":\"谁先进球\",\"tiers\":{\"fun\":80}}
-  ]}]}")
+# 含中文的请求体一律走文件：Windows 的 curl.exe 会用本地代码页解码命令行参数，直接 -d 传中文会变乱码
+cat > /tmp/whl-create.json <<JSON
+{
+  "title": "英超第3轮", "deadline": "$DEADLINE", "rewardCap": 1000, "openNow": true,
+  "matches": [{"home": "阿森纳", "away": "切尔西", "items": [
+    {"type": "score", "tiers": {"score": 300, "goals": 100, "wdl": 50}},
+    {"type": "wdl", "tiers": {"wdl": 50}},
+    {"type": "goals", "tiers": {"goals": 100}},
+    {"type": "fun", "question": "谁先进球", "tiers": {"fun": 80}}
+  ]}]
+}
+JSON
+CREATE=$(curl -sf -b "$J" -X POST "$BASE/api/admin/events" -H 'Content-Type: application/json' -d @/tmp/whl-create.json)
 echo "$CREATE"
 EID=$(echo "$CREATE" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).eventId))")
 ok "eventId=$EID"
+# 玩法项与场次 id 必须从刚建的竞猜里取：本地库 AUTOINCREMENT 会累积，写死 1-4 只对全新库成立
+IDS=$(curl -sf -b "$J" "$BASE/api/events/$EID" | node -e "
+  let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
+    const d=JSON.parse(s); const byType={};
+    for(const i of d.items) byType[i.type]=i.id;
+    console.log([byType.score,byType.wdl,byType.goals,byType.fun,(d.matches[0]||{}).id].join(' '));
+  })")
+P_SCORE=$(echo "$IDS" | cut -d' ' -f1); P_WDL=$(echo "$IDS" | cut -d' ' -f2)
+P_GOALS=$(echo "$IDS" | cut -d' ' -f3); P_FUN=$(echo "$IDS" | cut -d' ' -f4); MID=$(echo "$IDS" | cut -d' ' -f5)
+ok "比分=$P_SCORE 胜平负=$P_WDL 总进球=$P_GOALS 趣味=$P_FUN 场次=$MID"
 
 say "4. 生成绑定码 + HMAC 回调绑定（sm1→QQ10001, sm2→QQ10002, sm3 故意不绑）"
 C1=$(curl -sf -b "$U1" -X POST "$BASE/api/bind/new" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).code))")
@@ -81,19 +96,21 @@ claim "$C2" 10002
 ok "错误码验证：重放同一码应被拒"
 claim "$C1" 99999 || true
 
-say "5. 提交预测（玩法项 id：1=比分 2=胜平负 3=总进球 4=趣味）"
-curl -sf -b "$U1" -X PUT "$BASE/api/events/$EID/predictions" -H 'Content-Type: application/json' \
-  -d '{"predictions":[{"playItemId":1,"content":{"home":2,"away":1}},{"playItemId":2,"content":"home"},{"playItemId":3,"content":3},{"playItemId":4,"content":"萨卡"}]}'; echo
+say "5. 提交预测（玩法项 id 由本次竞猜动态取出）"
+cat > /tmp/whl-p1.json <<JSON
+{"predictions":[{"playItemId":$P_SCORE,"content":{"home":2,"away":1}},{"playItemId":$P_WDL,"content":"home"},{"playItemId":$P_GOALS,"content":3},{"playItemId":$P_FUN,"content":"萨卡"}]}
+JSON
+curl -sf -b "$U1" -X PUT "$BASE/api/events/$EID/predictions" -H 'Content-Type: application/json' -d @/tmp/whl-p1.json; echo
 curl -sf -b "$U2" -X PUT "$BASE/api/events/$EID/predictions" -H 'Content-Type: application/json' \
-  -d '{"predictions":[{"playItemId":1,"content":{"home":3,"away":0}},{"playItemId":2,"content":"home"},{"playItemId":3,"content":2}]}'; echo
+  -d "{\"predictions\":[{\"playItemId\":$P_SCORE,\"content\":{\"home\":3,\"away\":0}},{\"playItemId\":$P_WDL,\"content\":\"home\"},{\"playItemId\":$P_GOALS,\"content\":2}]}"; echo
 ok "sm3 未绑定 QQ，提交应被拒（403 need_binding）："
 curl -s -b "$U3" -X PUT "$BASE/api/events/$EID/predictions" -H 'Content-Type: application/json' \
-  -d '{"predictions":[{"playItemId":1,"content":{"home":2,"away":1}}]}'; echo
+  -d "{\"predictions\":[{\"playItemId\":$P_SCORE,\"content\":{\"home\":2,\"away\":1}}]}"; echo
 
 say "6. 提前截止 → 录比分 2:1 + 趣味题命中 sm1（本地 id $U1ID）"
 curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID/seal"; echo
 curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID/result" -H 'Content-Type: application/json' \
-  -d "{\"results\":[{\"matchId\":1,\"home\":2,\"away\":1}],\"fun\":[{\"itemId\":4,\"hits\":[$U1ID]}]}"; echo
+  -d "{\"results\":[{\"matchId\":$MID,\"home\":2,\"away\":1}],\"fun\":[{\"itemId\":$P_FUN,\"hits\":[$U1ID]}]}"; echo
 ok "期望：sm1=300+50+100+80=530；sm2=100+50=150；sm3 未绑定不能参与（总计 680）"
 
 say "7. 确认发奖（SYNC_BASE_URL 指向 mock → 直接 credited；不可达时则 unknown 进重试队列）"

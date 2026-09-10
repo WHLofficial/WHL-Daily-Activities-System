@@ -22,17 +22,20 @@ export function buildReportText(
     const actual = actualScores[m.id];
     lines.push(`⚽ ${actual ? `${m.home} ${actual.home}:${actual.away} ${m.away}` : `${m.home} vs ${m.away}`}`);
     for (const item of items.filter((i) => i.match_id === m.id)) {
-      const winners = detail.flatMap((d) =>
-        d.items.filter((i) => i.itemId === item.id && i.hit)
-          .map((i) => ({ name: d.name, reward: i.reward })));
-      if (winners.length === 0) continue;
-      const byReward = new Map<number, string[]>();
-      for (const w of winners) {
-        if (!byReward.has(w.reward)) byReward.set(w.reward, []);
-        byReward.get(w.reward)!.push(w.name);
+      // 按「实际命中的档位 + 分额」分组：猜比分的玩法项也可能只吃到总进球/胜平负档，
+      // 按玩法项类型贴标签会把 +100 写成「比分全中」，读起来是错的。
+      const groups = new Map<string, { label: string; reward: number; names: string[] }>();
+      for (const d of detail) {
+        for (const i of d.items) {
+          if (i.itemId !== item.id || !i.hit) continue;
+          const label = TIER_LABEL[i.tier] || TIER_LABEL[item.type] || item.question;
+          const key = `${label}|${i.reward}`;
+          if (!groups.has(key)) groups.set(key, { label, reward: i.reward, names: [] });
+          groups.get(key)!.names.push(d.name);
+        }
       }
-      for (const [reward, names] of [...byReward.entries()].sort((a, b) => b[0] - a[0])) {
-        lines.push(`  ${TIER_LABEL[item.type] || item.question}: ${names.join('、')} （+${reward}）`);
+      for (const g of [...groups.values()].sort((a, b) => b.reward - a.reward)) {
+        lines.push(`  ${g.label}: ${g.names.join('、')} （+${g.reward}）`);
       }
     }
   }
