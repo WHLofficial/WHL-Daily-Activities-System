@@ -1,5 +1,5 @@
 // 用户端 SPA（无框架，hash 路由）：#/ 列表 · #/event/:id 详情 · #/bind 绑定
-import { api, fmtTime, countdown, STATUS_LABEL, STATUS_CLASS, esc, toast } from './core.js';
+import { api, fmtTime, countdown, STATUS_LABEL, STATUS_CLASS, esc, toast, PASSWORD_FORM, wirePassword } from './core.js';
 
 const app = document.getElementById('app');
 let me = null; // { user, binding }
@@ -19,7 +19,7 @@ function renderLogin(mode = 'login') {
       <div class="row" style="margin-top:16px"><button id="li-go" style="flex:1">${reg ? '注 册' : '登 录'}</button></div>
       <div class="muted" style="margin-top:10px;text-align:center">${reg ? '已有账号？' : '没有账号？'}<a href="#" id="li-sw">${reg ? '去登录' : '注册一个'}</a></div>
     </div>`;
-  document.getElementById('li-sw').onclick = (e) => { e.preventDefault(); renderLogin(reg ? 'login' : 'register'); };
+  document.getElementById('li-sw').onclick = (e) => { e.preventDefault(); location.hash = reg ? '#/login' : '#/register'; };
   const go = async () => {
     try {
       if (reg) {
@@ -223,34 +223,64 @@ async function renderBind() {
   };
 }
 
-// ---------- 框架 ----------
-async function loadMe() {
-  me = await api('/me');
-  const { user } = me;
-  document.getElementById('nav-bind').hidden = !user;
-  document.getElementById('nav-logout').hidden = !user;
-  document.getElementById('nav-admin').hidden = !user || user.role === 'user';
+// ---------- 改密码 ----------
+function renderPassword() {
+  app.innerHTML = `<a class="muted" href="#/">← 返回</a><div class="card">${PASSWORD_FORM}</div>`;
+  wirePassword(app, () => { location.hash = '#/'; });
 }
 
+// ---------- 顶栏 ----------
+function renderTopbar() {
+  const user = me?.user;
+  document.getElementById('userbox').hidden = !user;
+  document.getElementById('nav-bind').hidden = !user;
+  document.getElementById('nav-admin').hidden = !user || (user.role !== 'admin' && !me.is_initiator);
+  if (user) {
+    document.getElementById('user-name').textContent = user.name;
+    document.getElementById('user-role').textContent =
+      user.role === 'admin' ? '管理员' : me.is_initiator ? '发起人' : '观众';
+  }
+}
+
+let logoutTimer = null;
+function resetLogout() {
+  clearTimeout(logoutTimer);
+  const btn = document.getElementById('nav-logout');
+  btn.textContent = '登出';
+  btn.className = 'ghost';
+}
+document.getElementById('nav-logout').onclick = async () => {
+  const btn = document.getElementById('nav-logout');
+  if (!btn.classList.contains('danger')) {
+    // 两步确认：点第一下进入待确认，5 秒内不再点就自动还原
+    btn.textContent = '再点一次确认登出';
+    btn.className = 'danger';
+    logoutTimer = setTimeout(resetLogout, 5000);
+    return;
+  }
+  await api('/logout', { method: 'POST' });
+  me = null;
+  resetLogout();
+  location.hash = '';
+  route();
+};
+
+// ---------- 框架 ----------
+async function loadMe() { me = await api('/me'); }
+
 function route() {
-  if (!me?.user) { renderLogin(); return; }
+  renderTopbar();
+  if (!me?.user) { renderLogin(location.hash === '#/register' ? 'register' : 'login'); return; }
   const h = location.hash || '#/';
   if (h.startsWith('#/event/')) renderDetail(Number(h.split('/')[2])).catch(showErr);
   else if (h === '#/bind') renderBind().catch(showErr);
+  else if (h === '#/password') renderPassword();
   else renderList().catch(showErr);
 }
 function showErr(e) {
   app.innerHTML = `<div class="banner bad">${esc(e.message)}</div><a class="muted" href="#/">← 返回</a>`;
 }
 
-document.getElementById('nav-logout').onclick = async () => {
-  await api('/logout', { method: 'POST' });
-  me = null; location.hash = ''; route();
-  document.getElementById('nav-bind').hidden = true;
-  document.getElementById('nav-admin').hidden = true;
-  document.getElementById('nav-logout').hidden = true;
-};
-document.getElementById('nav-bind').onclick = () => { location.hash = '#/bind'; };
 window.addEventListener('hashchange', route);
 
 loadMe().then(route).catch(showErr);

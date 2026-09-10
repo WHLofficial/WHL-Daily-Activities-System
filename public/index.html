@@ -1,19 +1,26 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>WHL 竞猜</title>
-  <link rel="stylesheet" href="/style.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WHL 竞猜系统</title>
+<link rel="stylesheet" href="./style.css">
 </head>
 <body>
-  <header class="app">
-    <span class="title">🎯 WHL 竞猜</span>
-    <button class="link" id="nav-bind" hidden>绑定</button>
-    <a href="/admin.html" id="nav-admin" hidden>管理</a>
-    <button class="link" id="nav-logout" hidden>退出</button>
-  </header>
-  <div class="wrap" id="app"><div class="empty">加载中…</div></div>
-  <script type="module" src="/app.js"></script>
+<header class="topbar">
+  <a class="brand" href="#/">🎯 WHL 竞猜系统</a>
+  <nav class="nav-links">
+    <a id="nav-bind" href="#/bind" hidden>绑定 QQ</a>
+    <a id="nav-admin" href="./admin.html" hidden>管理台</a>
+  </nav>
+  <span class="userbox" id="userbox" hidden>
+    <span id="user-name"></span>
+    <span class="role-badge" id="user-role"></span>
+    <a id="nav-password" href="#/password">改密码</a>
+    <button class="ghost" id="nav-logout">登出</button>
+  </span>
+</header>
+<main class="wrap" id="app"></main>
+<script type="module" src="./app.js"></script>
 </body>
 </html>

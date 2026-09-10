@@ -1,5 +1,5 @@
 // 管理端 SPA：建期 / 状态流转 / 录结果 / 结算预览 / 确认发奖 / 批次状态 / 冲正 / 对账
-import { api, fmtTime, countdown, STATUS_LABEL, STATUS_CLASS, esc, toast } from './core.js';
+import { api, fmtTime, countdown, STATUS_LABEL, STATUS_CLASS, esc, toast, PASSWORD_FORM, wirePassword } from './core.js';
 
 const app = document.getElementById('app');
 let me = null;
@@ -393,31 +393,74 @@ function formatContent(type, c) {
   return String(c);
 }
 
+// ---------- 顶栏 ----------
+function renderTopbar() {
+  const user = me?.user;
+  document.getElementById('userbox').hidden = !user;
+  if (user) {
+    document.getElementById('user-name').textContent = user.name;
+    document.getElementById('user-role').textContent =
+      user.role === 'admin' ? '管理员' : me.is_initiator ? '发起人' : '观众';
+  }
+}
+
+let logoutTimer = null;
+function resetLogout() {
+  clearTimeout(logoutTimer);
+  const btn = document.getElementById('nav-logout');
+  btn.textContent = '登出';
+  btn.className = 'ghost';
+}
+document.getElementById('nav-logout').onclick = async () => {
+  const btn = document.getElementById('nav-logout');
+  if (!btn.classList.contains('danger')) {
+    // 两步确认：点第一下进入待确认，5 秒内不再点就自动还原
+    btn.textContent = '再点一次确认登出';
+    btn.className = 'danger';
+    logoutTimer = setTimeout(resetLogout, 5000);
+    return;
+  }
+  await api('/logout', { method: 'POST' });
+  me = null;
+  resetLogout();
+  location.hash = '';
+  route();
+};
+
+// ---------- 改密码 ----------
+function renderPassword() {
+  app.innerHTML = `<a class="muted" href="#/">← 返回</a><div class="card">${PASSWORD_FORM}</div>`;
+  wirePassword(app, () => { location.hash = '#/'; });
+}
+
+// ---------- 框架 ----------
 function switchTab(tab) {
   view.tab = tab;
-  document.getElementById('tab-events').style.fontWeight = tab === 'events' ? '800' : '400';
-  document.getElementById('tab-recon').style.fontWeight = tab === 'recon' ? '800' : '400';
-  route();
+  if (location.hash && location.hash !== '#/') location.hash = '#/';
+  else route();
+}
+function renderTabs() {
+  document.getElementById('tab-events').classList.toggle('is-active', view.tab === 'events');
+  document.getElementById('tab-recon').classList.toggle('is-active', view.tab === 'recon');
 }
 
 document.getElementById('tab-events').onclick = () => switchTab('events');
 document.getElementById('tab-recon').onclick = () => switchTab('recon');
-document.getElementById('nav-logout').onclick = async () => {
-  await api('/logout', { method: 'POST' });
-  me = null; renderLogin();
-};
 
 window.addEventListener('hashchange', route);
 function route() {
+  renderTopbar();
+  renderTabs();
   if (!me?.user) { renderLogin(); return; }
-  if (me.user.role === 'user' && !me.is_initiator) {
-    app.innerHTML = '<div class="banner bad">没有管理权限</div>';
+  if (me.user.role !== 'admin' && !me.is_initiator) {
+    app.innerHTML = '<div class="banner bad">这个账号没有管理台权限</div>';
     return;
   }
   const h = location.hash || '#/';
   if (h.startsWith('#/manage/')) renderManage(Number(h.split('/')[2])).catch(showErr);
   else if (h.startsWith('#/batch/')) renderBatch(Number(h.split('/')[2])).catch(showErr);
   else if (h === '#/new') renderNew().catch(showErr);
+  else if (h === '#/password') renderPassword();
   else if (view.tab === 'recon') renderRecon().catch(showErr);
   else renderEvents().catch(showErr);
 }

@@ -56,3 +56,26 @@ export function toast(msg, isErr = false) {
   setTimeout(() => el.classList.add('show'), 10);
   setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, 3000);
 }
+
+// 改密码表单（用户端与管理台共用）：账号全站通用，改完两边都生效
+export const PASSWORD_FORM = `
+  <h3>修改密码</h3>
+  <div class="muted">新密码至少 8 位，要同时包含字母和数字。改完在赛事系统也用新密码登录。</div>
+  <label class="field"><span>当前密码</span><input id="pw-old" type="password" autocomplete="current-password"></label>
+  <label class="field"><span>新密码</span><input id="pw-new" type="password" autocomplete="new-password"></label>
+  <label class="field"><span>再输一次新密码</span><input id="pw-new2" type="password" autocomplete="new-password"></label>
+  <div class="row mt"><button class="grow" id="pw-go">保存新密码</button></div>`;
+
+export function wirePassword(root, onDone) {
+  const val = (id) => root.querySelector('#' + id)?.value?.trim() ?? '';
+  const go = async () => {
+    if (val('pw-new') !== val('pw-new2')) return toast('两次输入的新密码不一致', true);
+    try {
+      await api('/password', { method: 'POST', body: { oldPassword: val('pw-old'), newPassword: val('pw-new') } });
+      toast('密码已更新');
+      onDone();
+    } catch (e) { toast(e.message, true); }
+  };
+  root.querySelector('#pw-go').onclick = go;
+  root.querySelectorAll('input').forEach((i) => i.addEventListener('keydown', (e) => e.key === 'Enter' && go()));
+}
