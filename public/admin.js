@@ -241,7 +241,7 @@ async function showBatchInto(container, batchId) {
             <td>${esc(i.display_name)}</td><td>${esc(i.qq_id)}</td>
             <td class="num">${i.amount}</td>
             <td>${statusPill(PAYOUT_STATUS, i.status)}</td>
-            <td class="muted">${esc(i.last_error || '')}${i.retry_count ? ` 重试 ${i.retry_count} 次` : ''}</td>
+            <td class="muted">${i.status === 'credited' ? '—' : `${esc(i.last_error || '')}${i.retry_count ? ` 重试 ${i.retry_count} 次` : ''}`}</td>
             <td>${i.status === 'credited' ? `<button class="ghost small" data-rev="${esc(i.payout_id)}">冲正</button>` : ''}</td>
           </tr>`).join('')}
       </table>
@@ -386,8 +386,10 @@ async function renderRecon() {
 function renderTopbar() {
   const user = me?.user;
   document.getElementById('userbox').hidden = !user;
+  const canManage = !!user && (user.role === 'admin' || user.role === 'superadmin' || !!me.is_initiator);
+  document.querySelector('.nav-links').hidden = !canManage;
   if (user) {
-    document.getElementById('user-name').textContent = user.name;
+    document.getElementById('user-name').textContent = user.display_name || user.username || '';
     document.getElementById('user-role').textContent = roleLabel(user, me.is_initiator);
   }
 }

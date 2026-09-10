@@ -126,7 +126,7 @@ async function renderDetail(id) {
         </div>
         ${d.items.filter((i) => i.match_id === m.id).map((i) => `
           <div class="item" data-item="${i.id}">
-            <div class="q">${esc(i.question)} <span class="muted">${TYPE_NAME[i.type]}</span></div>
+            <div class="q">${esc(i.question)}${i.question === TYPE_NAME[i.type] ? '' : ` <span class="muted">${TYPE_NAME[i.type]}</span>`}</div>
             <div class="tier-hint">${tierHint(i)}</div>
             ${itemInput(i, d.myPredictions[i.id])}
           </div>`).join('')}
@@ -220,7 +220,7 @@ function renderTopbar() {
   document.getElementById('nav-bind').hidden = !user;
   document.getElementById('nav-admin').hidden = !user || (user.role !== 'admin' && !me.is_initiator);
   if (user) {
-    document.getElementById('user-name').textContent = user.name;
+    document.getElementById('user-name').textContent = user.display_name || user.username || '';
     document.getElementById('user-role').textContent = roleLabel(user, me.is_initiator);
   }
 }
