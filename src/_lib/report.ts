@@ -32,13 +32,13 @@ export function buildReportText(
         byReward.get(w.reward)!.push(w.name);
       }
       for (const [reward, names] of [...byReward.entries()].sort((a, b) => b[0] - a[0])) {
-        lines.push(`  ${TIER_LABEL[item.type] || item.question}: ${names.join('、')} (+${reward})`);
+        lines.push(`  ${TIER_LABEL[item.type] || item.question}: ${names.join('、')} （+${reward}）`);
       }
     }
   }
 
   lines.push('──────────────');
-  lines.push(`本期 ${detail.length} 人命中，共发放 ${totalAmount} 积分`);
+  lines.push(`本次竞猜 ${detail.length} 人命中，共发放 ${totalAmount} 积分`);
   lines.push('积分已自动到账，感谢参与 🎉');
   return lines.join('\n');
 }

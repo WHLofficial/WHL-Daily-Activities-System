@@ -126,11 +126,11 @@ export async function isInitiator(env: any, userId: number): Promise<boolean> {
   return !!row;
 }
 
-// 建期/开盘/截止/录比分/结算/确认：管理员或发起人名单内
+// 开放竞猜/截止/录比分/结算/确认发奖：仅管理员或发起人可进行此操作
 export async function requireManager(env: any, request: Request): Promise<any> {
   const user = await requireUser(env, request);
   if (user.role !== 'admin' && !(await isInitiator(env, user.id))) {
-    throw new HttpError(403, '仅管理员或发起人可操作');
+    throw new HttpError(403, '仅管理员或发起人可进行此操作');
   }
   return user;
 }
@@ -143,7 +143,7 @@ export async function requireUser(env: any, request: Request): Promise<any> {
 
 export async function requireRole(env: any, request: Request, roles: string[]): Promise<any> {
   const user = await requireUser(env, request);
-  if (!roles.includes(user.role)) throw new HttpError(403, '没有权限');
+  if (!roles.includes(user.role)) throw new HttpError(403, '没有权限进行此操作');
   return user;
 }
 

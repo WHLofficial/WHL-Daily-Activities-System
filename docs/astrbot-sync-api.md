@@ -65,7 +65,7 @@ Content-Type: application/json
 | `qq_id` | 收款 QQ 号（字符串，可能带非数字风险，按字符串处理） |
 | `amount` | 正数=发放；**负数=冲正**（`type:"reversal"` 时出现，扣回积分） |
 | `type` | `reward` / `reversal` / `reconciliation`（对账补差，P1 预留） |
-| `event_id` | 关联竞猜期 |
+| `event_id` | 关联竞猜 |
 | `ts` | 指令产生时间（ISO 8601） |
 
 **必须返回**（HTTP 200，签名不验或参数错返回 4xx）：

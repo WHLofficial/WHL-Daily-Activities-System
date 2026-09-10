@@ -216,7 +216,7 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       if (!tour || !(await tourVerifyPassword(String(body.password ?? ''), tour.password_hash))) {
         throw new HttpError(401, '昵称或密码不正确');
       }
-      if (tour.must_change_pw === 1) throw new HttpError(403, '该账号需先修改密码，请到比赛系统登录修改');
+      if (tour.must_change_pw === 1) throw new HttpError(403, '该账号需先修改密码，请到赛事系统登录修改');
       const local = await mirrorTourUser(env, tour);
       const token = await createSession(env, local.id);
       return json({ ok: true, role: local.role }, 200, { 'Set-Cookie': sessionCookie(token) });
@@ -275,7 +275,7 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       const event = await env.DB.prepare(
         `SELECT * FROM event WHERE id = ? AND status != 'draft'`,
       ).bind(Number(seg[1])).first() as any;
-      if (!event) throw new HttpError(404, '竞猜期不存在');
+      if (!event) throw new HttpError(404, '竞猜不存在');
       const matches = (await env.DB.prepare('SELECT * FROM match WHERE event_id = ? ORDER BY id').bind(event.id).all()).results as any[];
       const items = (await env.DB.prepare(
         `SELECT i.* FROM play_item i JOIN match m ON m.id = i.match_id WHERE m.event_id = ? ORDER BY m.id, i.sort, i.id`,
@@ -310,8 +310,8 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       const bound = await env.DB.prepare('SELECT 1 AS ok FROM user_binding WHERE user_id = ?').bind(user.id).first();
       if (!bound) throw new HttpError(403, '请先完成 QQ 绑定再提交预测', 'need_binding');
       const event = await env.DB.prepare('SELECT * FROM event WHERE id = ?').bind(Number(seg[1])).first() as any;
-      if (!event) throw new HttpError(404, '竞猜期不存在');
-      if (event.status !== 'open') throw new HttpError(400, '本期不在提交时段');
+      if (!event) throw new HttpError(404, '竞猜不存在');
+      if (event.status !== 'open') throw new HttpError(400, '本次竞猜不在提交时段');
       if (new Date(event.deadline).getTime() <= Date.now()) throw new HttpError(400, '已过提交截止时间');
       const body = await readBody(request);
       const preds: any[] = body.predictions || [];
@@ -321,7 +321,7 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
         const item = await env.DB.prepare(
           `SELECT i.* FROM play_item i JOIN match m ON m.id = i.match_id WHERE i.id = ? AND m.event_id = ?`,
         ).bind(Number(p.playItemId), event.id).first() as any;
-        if (!item) throw new HttpError(400, `玩法项 ${p.playItemId} 不属于本期`);
+        if (!item) throw new HttpError(400, `玩法项 ${p.playItemId} 不属于本次竞猜`);
         const contentJson = validateContent(item.type, p.content);
         stmts.push(env.DB.prepare(
           `INSERT INTO prediction (play_item_id, user_id, content_json) VALUES (?, ?, ?)
@@ -395,7 +395,7 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
         const matches: any[] = body.matches || [];
         if (matches.length < 1 || matches.length > 3) throw new HttpError(400, '比赛场次 1~3 场');
 
-        // 先整体校验再落库：任何一项不合法都直接拒绝，不留半成品竞猜期
+        // 先整体校验再落库：任何一项不合法都直接拒绝，不留半成品竞猜
         const matchRows: { home: string; away: string; kickoff: any }[] = [];
         const itemRows: { mi: number; type: string; question: string; tierJson: string; cap: number | null; sort: number }[] = [];
         matches.forEach((m: any, mi: number) => {
@@ -410,7 +410,7 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
             const it = items[i];
             const type = String(it.type);
             if (!['score', 'wdl', 'goals', 'fun'].includes(type)) throw new HttpError(400, `未知玩法类型 ${type}`);
-            const question = String(it.question || '').trim() || { score: '猜比分', wdl: '胜平负', goals: '总进球数', fun: '趣味题' }[type];
+            const question = String(it.question || '').trim() || { score: '猜比分', wdl: '胜平负', goals: '总进球', fun: '趣味题' }[type];
             itemRows.push({ mi, type, question, tierJson: validateTiers(type, it.tiers), cap: it.cap ? Number(it.cap) : null, sort: i });
           }
         });
@@ -441,11 +441,11 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       }
 
       const isEventRoute = seg[1] === 'events' && seg.length >= 3;
-      if (isEventRoute && !eventId) throw new HttpError(404, '缺少竞猜期 id');
+      if (isEventRoute && !eventId) throw new HttpError(404, '缺少竞猜 id');
       const event = isEventRoute
         ? await env.DB.prepare('SELECT * FROM event WHERE id = ?').bind(eventId).first() as any
         : null;
-      if (isEventRoute && !event) throw new HttpError(404, '竞猜期不存在');
+      if (isEventRoute && !event) throw new HttpError(404, '竞猜不存在');
 
       if (isEventRoute && method === 'GET' && seg.length === 3) {
         const matches = (await env.DB.prepare('SELECT * FROM match WHERE event_id = ? ORDER BY id').bind(eventId).all()).results;
@@ -489,13 +489,13 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       }
 
       if (isEventRoute && method === 'POST' && seg[3] === 'seal') {
-        if (event.status !== 'open') throw new HttpError(400, '只有开放中的期可以截止');
+        if (event.status !== 'open') throw new HttpError(400, '只有开放中的竞猜可以截止');
         await env.DB.prepare(`UPDATE event SET status = 'sealed' WHERE id = ?`).bind(eventId).run();
         return json({ ok: true });
       }
 
       if (isEventRoute && method === 'POST' && seg[3] === 'archive') {
-        if (!['paid'].includes(event.status)) throw new HttpError(400, '只有已发奖的期可以归档');
+        if (!['paid'].includes(event.status)) throw new HttpError(400, '只有已发奖的竞猜可以归档');
         await env.DB.prepare(`UPDATE event SET status = 'archived' WHERE id = ?`).bind(eventId).run();
         return json({ ok: true });
       }
@@ -509,13 +509,13 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
           `SELECT i.* FROM play_item i JOIN match m ON m.id = i.match_id WHERE m.event_id = ?`,
         ).bind(eventId).all()).results as any[];
         for (const r of input.results) {
-          if (!matches.some((m) => m.id === r.matchId)) throw new HttpError(400, '场次不属于本期');
+          if (!matches.some((m) => m.id === r.matchId)) throw new HttpError(400, '场次不属于本次竞猜');
           if (![r.home, r.away].every((v: any) => Number.isInteger(v) && v >= 0 && v <= 99)) {
             throw new HttpError(400, '比分必须是 0~99 的整数');
           }
         }
         for (const f of input.fun) {
-          if (!items.some((i) => i.id === f.itemId && i.type === 'fun')) throw new HttpError(400, '趣味题不属于本期');
+          if (!items.some((i) => i.id === f.itemId && i.type === 'fun')) throw new HttpError(400, '趣味题不属于本次竞猜');
         }
         const preds = (await env.DB.prepare(
           `SELECT p.play_item_id, p.user_id, p.content_json FROM prediction p
@@ -551,7 +551,7 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
         const st = await env.DB.prepare('SELECT * FROM settlement WHERE event_id = ?').bind(eventId).first() as any;
         if (!st) throw new HttpError(400, '没有结算数据');
         const breaches = st.cap_breached as number;
-        if (breaches && !body.overrideCap) throw new HttpError(400, '存在奖励超限的玩法项，需勾选“知晓超限”后才能确认');
+        if (breaches && !body.overrideCap) throw new HttpError(400, '存在奖励超限的玩法项，需勾选「知晓超限」后才能确认');
 
         const detail = JSON.parse(st.detail_json);
         const results = JSON.parse(st.result_json);

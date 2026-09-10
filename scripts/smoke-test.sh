@@ -6,7 +6,7 @@
 #      npx wrangler d1 execute whl --local --command "INSERT INTO organization (id,name,allow_open_reg) VALUES (1,'WHL',1) ON CONFLICT(id) DO UPDATE SET allow_open_reg=1"
 #      npx wrangler d1 execute whl --local --command "INSERT OR IGNORE INTO user (name,password_hash,role) VALUES ('smboss','$(node scripts/gen-tour-hash.mjs secret123)','admin')"
 #   c) dev 服务已起（npx wrangler dev --port 8789，.dev.vars 提供测试密钥）
-# 验证：播种→注册（自动登录）→验密登录→开盘→HMAC 绑定→提交预测→截止→录结果→结算→确认发奖（发往不可达地址→unknown）→cron 重试→对账
+# 验证：播种→注册（自动登录）→验密登录→开放竞猜→HMAC 绑定→提交预测→截止→录结果→结算→确认发奖（发往不可达地址→unknown）→cron 重试→对账
 set -e
 BASE="http://127.0.0.1:8789"
 SECRET="${SYNC_SECRET:-testsecret}"
@@ -59,7 +59,7 @@ curl -s -X POST "$BASE/api/register" -H 'Content-Type: application/json' -d '{"n
 ok "弱密码注册应被拒（400）："
 curl -s -X POST "$BASE/api/register" -H 'Content-Type: application/json' -d '{"name":"sm9","password":"pass111"}'; echo
 
-say "3. 创建竞猜期（1 场 4 项，立即开放）"
+say "3. 创建竞猜（1 场 4 项，立即开放）"
 DEADLINE=$(node -e "console.log(new Date(Date.now()+3600e3).toISOString())")
 CREATE=$(curl -sf -b "$J" -X POST "$BASE/api/admin/events" -H 'Content-Type: application/json' -d "{
   \"title\":\"英超第3轮\", \"deadline\":\"$DEADLINE\", \"rewardCap\":1000, \"openNow\":true,
