@@ -8,7 +8,7 @@
 #      # 步 16 用的「被管理员重置密码」账号（reset-local.sh 也会自动预置）
 #      npx wrangler d1 execute whl --local --command "INSERT OR REPLACE INTO user (name,password_hash,role,locked,must_change_pw) VALUES ('sm4','$(node scripts/gen-tour-hash.mjs pass4444)','coach',0,1)"
 #   c) dev 服务已起（npx wrangler dev --port 8789，.dev.vars 提供测试密钥）
-# 验证：播种→注册（自动登录）→验密登录→开放竞猜→HMAC 绑定→提交预测→截止→录结果→结算→确认发奖（发往不可达地址→unknown）→cron 重试→对账
+# 验证：播种→注册（自动登录）→验密登录→开放竞猜→HMAC 绑定→提交预测→截止→录结果→结算→确认发奖（发往不可达地址→unknown）→cron 重试→对账→强制改密→开放通知与截止提醒
 set -e
 BASE="http://127.0.0.1:8789"
 SECRET="${SYNC_SECRET:-testsecret}"
@@ -33,6 +33,29 @@ claim() { # 一次性绑定码 -> HMAC 调 bind/claim（与 docs/astrbot-sync-ap
     const sign=crypto.createHmac("sha256",secret).update(`POST|/api/bind/claim|${ts}|${body}`).digest("hex");
     fetch(base+"/api/bind/claim",{method:"POST",headers:{"Content-Type":"application/json","X-Timestamp":String(ts),"X-Sign":sign},body}).then(r=>r.text()).then(t=>console.log("  -> claim:",t));
   ' "$1" "$2" "$SECRET" "$BASE"
+}
+
+pull_until() { # 像真插件那样「拉 5 条 → ack → 再拉」，直到看到含 $1 的待发内容；拉不到则退出 1
+  # 队列每轮只返回 5 条，跑到后面时新内容会被旧内容挤出窗口，所以不能只拉一次就断言
+  node -e '
+    const crypto=require("crypto");
+    const [secret,base,marker,tries]=process.argv.slice(1);
+    const sign=(m,p,ts,b)=>crypto.createHmac("sha256",secret).update(`${m}|${p}|${ts}|${b||""}`).digest("hex");
+    (async () => {
+      for (let i=0;i<Number(tries);i++){
+        const t1=Math.floor(Date.now()/1000);
+        const r=await fetch(base+"/api/reports/pending",{headers:{"X-Timestamp":String(t1),"X-Sign":sign("GET","/api/reports/pending",t1)}});
+        const list=(await r.json()).reports||[];
+        const hit=list.find(x=>x.content.includes(marker));
+        if (hit){ console.log(hit.content); return; }
+        if (!list.length) break;
+        const t2=Math.floor(Date.now()/1000);
+        const body=JSON.stringify({ids:list.map(x=>x.id)});
+        await fetch(base+"/api/reports/ack",{method:"POST",headers:{"Content-Type":"application/json","X-Timestamp":String(t2),"X-Sign":sign("POST","/api/reports/ack",t2,body)},body});
+      }
+      process.exit(1);
+    })();
+  ' "$SECRET" "$BASE" "$1" "${2:-8}"
 }
 
 say "0a. 前端 JS 语法检查（node --check 对模块语法不可靠，改用 import() 捕 SyntaxError）"
@@ -347,24 +370,15 @@ node -e '
   assert(tierOf("sm1") === "hit2" && tierOf("sm2") === "hit1", `命中档记进明细（实得 sm1=${tierOf("sm1")} sm2=${tierOf("sm2")}）`);
 ' 
 say "14b. 战报：跨场次玩法单独一段（战报按场次逐场输出，不单列就会整段丢失）"
-node -e '
-    const crypto=require("crypto");
-    const [secret,base]=process.argv.slice(1);
-    const ts=Math.floor(Date.now()/1000);
-    const sign=crypto.createHmac("sha256",secret).update(`GET|/api/reports/pending|${ts}|`).digest("hex");
-    fetch(base+"/api/reports/pending",{headers:{"X-Timestamp":String(ts),"X-Sign":sign}}).then(r=>r.text()).then(t=>{
-      const rs=JSON.parse(t).reports||[];
-      const hit=rs.find(r=>r.content.includes("猜胜负"));
-      const assert=(cond,msg)=>{if(!cond){console.error("  ✗ "+msg);process.exit(1);}console.log("  ✓ "+msg);};
-      assert(!!hit, "待发战报里有猜胜负那一次的");
-      if (hit) {
-        console.log("--- 战报片段 ---");
-        console.log(hit.content);
-        assert(hit.content.includes("🎯 猜胜负"), "战报含「🎯 猜胜负」独立段");
-        assert(hit.content.includes("胜负中 2 场") && hit.content.includes("sm1"), "战报标出「胜负中 2 场」与中奖人");
-      }
-    });
-  ' "$SECRET" "$BASE"
+RPT4B=$(pull_until "🏆 竞猜战报 · 猜胜负分档验证") || { echo "  ✗ 待发战报里没有猜胜负那一次的"; exit 1; }
+echo "$RPT4B" | node -e '
+  const content=require("fs").readFileSync(0,"utf8");
+  const assert=(cond,msg)=>{if(!cond){console.error("  ✗ "+msg);process.exit(1);}console.log("  ✓ "+msg);};
+  console.log("--- 战报片段 ---");
+  console.log(content.trimEnd());
+  assert(content.includes("🎯 猜胜负"), "战报含「🎯 猜胜负」独立段");
+  assert(content.includes("胜负中 2 场") && content.includes("sm1"), "战报标出「胜负中 2 场」与中奖人");
+'
 
 say "14c. 猜胜负：每中一场固定分（per_hit）模式"
 DEADLINE5=$(node -e "console.log(new Date(Date.now()+3600e3).toISOString())")
@@ -482,23 +496,14 @@ node -e '
 '
 
 say "15b. 纯猜胜负战报：按命中场数贴档位标签"
-node -e '
-  const crypto=require("crypto");
-  const [secret,base]=process.argv.slice(1);
-  const ts=Math.floor(Date.now()/1000);
-  const sign=crypto.createHmac("sha256",secret).update(`GET|/api/reports/pending|${ts}|`).digest("hex");
-  fetch(base+"/api/reports/pending",{headers:{"X-Timestamp":String(ts),"X-Sign":sign}}).then(r=>r.text()).then(t=>{
-    const rs=JSON.parse(t).reports||[];
-    const hit=rs.find(r=>r.content.includes("pure wdl 10 matches"));
-    const assert=(cond,msg)=>{if(!cond){console.error("  ✗ "+msg);process.exit(1);}console.log("  ✓ "+msg);};
-    assert(!!hit, "待发战报里有 10 场纯猜胜负那一次的");
-    if (hit) {
-      assert(hit.content.includes("🎯 猜胜负"), "战报含「🎯 猜胜负」独立段");
-      assert(hit.content.includes("胜负中 4 场") && hit.content.includes("（+300）"), "标出「胜负中 4 场 （+300）」");
-      assert(hit.content.includes("胜负中 6 场") && hit.content.includes("（+500）"), "标出「胜负中 6 场 （+500）」");
-    }
-  });
-' "$SECRET" "$BASE"
+RPT5B=$(pull_until "🏆 竞猜战报 · pure wdl 10 matches") || { echo "  ✗ 待发战报里没有 10 场纯猜胜负那一次的"; exit 1; }
+echo "$RPT5B" | node -e '
+  const content=require("fs").readFileSync(0,"utf8");
+  const assert=(cond,msg)=>{if(!cond){console.error("  ✗ "+msg);process.exit(1);}console.log("  ✓ "+msg);};
+  assert(content.includes("🎯 猜胜负"), "战报含「🎯 猜胜负」独立段");
+  assert(content.includes("胜负中 4 场") && content.includes("（+300）"), "标出「胜负中 4 场 （+300）」");
+  assert(content.includes("胜负中 6 场") && content.includes("（+500）"), "标出「胜负中 6 场 （+500）」");
+'
 
 say "16. 强制改密：被管理员重置密码的账号在本站内改密（不再赶去赛事系统）"
 # sm4 由 reset-local.sh 预置成 must_change_pw=1（该标记只能在 dev 启动前写赛事本地库）
@@ -538,6 +543,61 @@ node -e '
   assert(relogin.ok === true && relogin.mustChangePassword === false, "新密码可登录且不再要求改密（已写回共享账号池）");
 ' "$LOGIN4" "$GATE4" "$NEWLOGIN4"
 if [ "$AFTER4" = "200" ]; then ok "改密后 GET /api/events 200"; else echo "  ✗ 改密后 GET /api/events 期望 200，实得 $AFTER4"; exit 1; fi
+
+say "17. 开放通知 + 截止前提醒（复用 report 队列，kind 区分；提醒挂在 */5 扫描上）"
+d1q() { npx wrangler d1 execute whl-guess --local --command "$1" --json 2>/dev/null | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.stringify(JSON.parse(s)[0].results)))"; }
+# 5 小时后截止：建期即开放，此时不该有提醒（还没进 4 小时窗口）
+DL7=$(node -e "console.log(new Date(Date.now()+5*3600e3).toISOString())")
+cat > "$SMOKE_TMP"/whl-notify.json <<JSON
+{"title": "通知验证局", "deadline": "$DL7", "rewardCap": 1000, "openNow": true,
+ "matches": [{"home": "甲队", "away": "乙队", "items": [{"type": "score", "tiers": {"score": 300, "goals": 100, "wdl": 50}}]}]}
+JSON
+EID7=$(curl -sf -b "$J" -X POST "$BASE/api/admin/events" -H 'Content-Type: application/json' -d @"$SMOKE_TMP"/whl-notify.json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).eventId))")
+ok "eventId=$EID7（5 小时后截止）"
+ROWS7=$(d1q "SELECT kind, content FROM report WHERE event_id = $EID7")
+STATE7=$(d1q "SELECT reminded_at FROM event WHERE id = $EID7")
+R0=$(curl -sf -X POST "$BASE/api/internal/remind" -H "X-Cron-Key: $CRON")
+ok "默认窗口扫描：$R0"
+R1=$(curl -sf -X POST "$BASE/api/internal/remind?ahead=360" -H "X-Cron-Key: $CRON")   # 临时把提前量放到 6 小时，模拟到点
+ok "提前量放到 6 小时的扫描：$R1"
+ROWS7B=$(d1q "SELECT kind, content FROM report WHERE event_id = $EID7")
+R2=$(curl -sf -X POST "$BASE/api/internal/remind?ahead=360" -H "X-Cron-Key: $CRON")
+ok "重复扫描：$R2"
+# 3 小时后截止：开放时就把 reminded_at 填了，不该再收到提醒（否则刚开放紧跟一条）
+DL7B=$(node -e "console.log(new Date(Date.now()+3*3600e3).toISOString())")
+cat > "$SMOKE_TMP"/whl-notify2.json <<JSON
+{"title": "短窗护栏局", "deadline": "$DL7B", "rewardCap": 1000, "openNow": true,
+ "matches": [{"home": "丙队", "away": "丁队", "items": [{"type": "wdl", "tiers": {"wdl": 50}}]}]}
+JSON
+EID7B=$(curl -sf -b "$J" -X POST "$BASE/api/admin/events" -H 'Content-Type: application/json' -d @"$SMOKE_TMP"/whl-notify2.json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).eventId))")
+R3=$(curl -sf -X POST "$BASE/api/internal/remind?ahead=240" -H "X-Cron-Key: $CRON")
+ROWS7C=$(d1q "SELECT kind, content FROM report WHERE event_id = $EID7B")
+STATE7B=$(d1q "SELECT reminded_at FROM event WHERE id = $EID7B")
+node -e '
+  const [rows, state, rowsB, r0, r1, r2, rowsC, stateB, r3] = process.argv.slice(1);
+  const j = (s) => JSON.parse(s);
+  const assert = (c, m) => { if (!c) { console.error("  ✗ " + m); process.exit(1); } console.log("  ✓ " + m); };
+  const a = j(rows), b = j(rowsB), c = j(rowsC);
+  const open = a.find((r) => r.kind === "open");
+  assert(a.length === 1 && !!open, `开放时只入队 1 条通知（实得 ${a.map((r) => r.kind).join("/")}）`);
+  assert(open.content.includes("🎯 新竞猜开放《通知验证局》"), "开放通知有标题");
+  assert(open.content.includes("共 1 场比赛"), "开放通知写了场次数");
+  assert(open.content.includes("最高可得 300 分"), `开放通知写了真实满分 300（实得 ${JSON.stringify(open.content)}）`);
+  assert(open.content.includes("截止") && open.content.includes("https://guess.whleague.win"), "开放通知写了截止时间与填预测入口");
+  assert(j(state)[0].reminded_at === null, "5 小时后的局提醒标记仍为空（等扫描）");
+  assert(j(r0).sent === 0, `默认 4 小时窗口扫不到它（实得 sent=${j(r0).sent}）`);
+  assert(j(r1).sent === 1, `进入窗口后发出 1 条提醒（实得 sent=${j(r1).sent}）`);
+  const remind = b.find((r) => r.kind === "remind");
+  assert(!!remind, "提醒进了 report 队列");
+  assert(remind.content.includes("⏰ 《通知验证局》还有约 5 小时截止"), "提醒写了剩余时间");
+  assert(remind.content.includes("已有 0 人提交"), "提醒报了当前提交人数");
+  assert(b.length === 2, `该竞猜共 2 条通知（开放 + 提醒，实得 ${b.length}）`);
+  assert(j(r2).sent === 0, `重复扫描不重复提醒（实得 sent=${j(r2).sent}）`);
+  assert(c.filter((r) => r.kind === "remind").length === 0, "短窗局不发提醒（开放时就填了标记）");
+  assert(c.some((r) => r.kind === "open"), "短窗局仍有开放通知");
+  assert(j(stateB)[0].reminded_at !== null, "短窗局的提醒标记在开放时即填上（护栏）");
+  assert(j(r3).sent === 0, `短窗局扫描时不重复发（实得 sent=${j(r3).sent}）`);
+' "$ROWS7" "$STATE7" "$ROWS7B" "$R0" "$R1" "$R2" "$ROWS7C" "$STATE7B" "$R3"
 
 echo
 echo "✅ 冒烟测试跑完，请人工核对上方各步骤返回与期望值"

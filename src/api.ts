@@ -11,6 +11,7 @@ import { sha256Hex, tourHashPassword, tourVerifyPassword } from './_lib/tourcryp
 import { computeSettlement, type ResultInput } from './_lib/judge.ts';
 import { dispatchPending, signAndFetch } from './_lib/sync.ts';
 import { buildReportText } from './_lib/report.ts';
+import { enqueueOpenNotice, sendDueReminders } from './_lib/notify.ts';
 
 function uuid(): string {
   return crypto.randomUUID();
@@ -153,7 +154,7 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
     if (method === 'GET' && seg[0] === 'reports' && seg[1] === 'pending') {
       await verifyPluginRequest(env, request, '');
       const rows = (await env.DB.prepare(
-        `SELECT id, event_id, content, created_at FROM report WHERE status = 'pending' ORDER BY created_at LIMIT 5`,
+        `SELECT id, event_id, content, kind, created_at FROM report WHERE status = 'pending' ORDER BY created_at LIMIT 5`,
       ).all()).results;
       return json({ reports: rows });
     }
@@ -582,6 +583,15 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
           ]);
           throw e;
         }
+        // 建期即开放时通知机器人发群；存草稿的等 /open 再发
+        // 通知失败不该让人以为整场竞猜没建成，所以只记日志（漏发的通知下轮可人工补发）
+        if (body.openNow) {
+          try {
+            await enqueueOpenNotice(env, eid);
+          } catch (e) {
+            console.error('[notify] 开放通知入队失败:', e);
+          }
+        }
         return json({ ok: true, eventId: eid });
       }
 
@@ -630,6 +640,11 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       if (isEventRoute && method === 'POST' && seg[3] === 'open') {
         if (event.status !== 'draft') throw new HttpError(400, '只有草稿能开放');
         await env.DB.prepare(`UPDATE event SET status = 'open' WHERE id = ?`).bind(eventId).run();
+        try {
+          await enqueueOpenNotice(env, eventId);
+        } catch (e) {
+          console.error('[notify] 开放通知入队失败:', e);
+        }
         return json({ ok: true });
       }
 
@@ -862,6 +877,13 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       await assertCronKey(env, request);
       const target = url.searchParams.get('date') || shanghaiDate(new Date(Date.now() - 86400_000));
       return json(await runRecon(env, target));
+    }
+
+    // 截止前提醒扫描：cron 每 5 分钟走这里；?ahead=<分钟> 可改提前量，用于手动补扫
+    if (method === 'POST' && seg[0] === 'internal' && seg[1] === 'remind') {
+      await assertCronKey(env, request);
+      const ahead = Number(url.searchParams.get('ahead'));
+      return json(await sendDueReminders(env, ahead > 0 ? ahead * 60_000 : undefined));
     }
 
     throw new HttpError(404, '未知接口');

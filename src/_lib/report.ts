@@ -64,3 +64,33 @@ export function buildReportText(
   lines.push('积分已自动到账，感谢参与 🎉');
   return lines.join('\n');
 }
+
+// 东八区展示时间（MM-DD HH:mm）：文案面向国内群聊，直接给本地时间，不让人自己换算
+export function fmtE8(iso: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date(iso));
+  const g = (t: string) => parts.find((p) => p.type === t)?.value || '';
+  return `${g('month')}-${g('day')} ${g('hour')}:${g('minute')}`;
+}
+
+const SITE_URL = 'https://guess.whleague.win';
+
+// 开放通知：机器人拉取后原样发群；不 @ 任何人，「谁还没交」由插件侧自己决定要不要点名
+export function buildOpenNotice(title: string, matchCount: number, deadline: string, maxReward: number): string {
+  return [
+    `🎯 新竞猜开放《${title}》`,
+    `共 ${matchCount} 场比赛，${fmtE8(deadline)} 截止，最高可得 ${maxReward} 分`,
+    `快去填预测：${SITE_URL}`,
+  ].join('\n');
+}
+
+// 截止提醒：扫描每 5 分钟一轮，首次进入「距截止 4 小时以内」时入队，
+// 所以 hoursLeft 正常就是 4（最多差 5 分钟），提前量被改时才不会是 4。
+export function buildRemindNotice(title: string, joined: number, hoursLeft: number): string {
+  return [
+    `⏰ 《${title}》还有约 ${hoursLeft} 小时截止`,
+    `已有 ${joined} 人提交，还没填的快去：${SITE_URL}`,
+  ].join('\n');
+}

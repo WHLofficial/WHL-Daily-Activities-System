@@ -4,6 +4,7 @@
 
 import { handleApi, runRecon } from './api';
 import { dispatchPending } from './_lib/sync';
+import { sendDueReminders } from './_lib/notify';
 
 export default {
   async fetch(request: Request, env: any): Promise<Response> {
@@ -17,7 +18,8 @@ export default {
   async scheduled(event: any, env: any) {
     if (event.cron === '*/5 * * * *') {
       const s = await dispatchPending(env);
-      console.log('[cron] retry:', JSON.stringify(s));
+      const rem = await sendDueReminders(env);
+      console.log('[cron] retry:', JSON.stringify(s), 'remind:', JSON.stringify(rem));
     } else if (event.cron === '0 9 * * *') {
       const r = await runRecon(env);
       console.log('[cron] recon:', JSON.stringify(r));
