@@ -62,10 +62,12 @@ npx wrangler deploy
 ```bash
 npx wrangler secret put SYNC_SECRET     # 与插件共享的 HMAC 密钥，填长随机串
 npx wrangler secret put CRON_SECRET     # 内部接口密钥（手动触发重试/对账用）
-npx wrangler secret put SYNC_BASE_URL   # 插件公网地址，第五步完成前可先填 http://127.0.0.1:9
+npx wrangler secret put SYNC_BASE_URL   # 插件的公网 HTTPS 地址，见下方注意事项
 ```
 
-cron（每 5 分钟重试 + 每日 09:00 对账）已内置在 Worker 里，**没有独立 cron 服务要部署**。
+> ⚠️ `SYNC_BASE_URL` 只能填**域名形式的 HTTPS 地址**（例如 `https://astrbot.whleague.win`）。Cloudflare 的生产环境对 IP 字面量（如 `http://1.2.3.4:9991`）一律拒绝，发奖会直接返回 HTTP 403 / Cloudflare error 1003；`http://127.0.0.1:xxx` 之类的占位符同样不行。隧道（第五步）没通之前先别急着发奖——先把这个 secret 留空或填真实域名，隧道验证通过后再补。
+
+cron（每 5 分钟重试未到账发放项 + 扫「截止前 4 小时」的提醒；每日 09:00 对账）已内置在 Worker 里，**没有独立 cron 服务要部署**。
 
 ---
 
@@ -109,7 +111,7 @@ npx wrangler secret put SYNC_BASE_URL    # 填 https://astrbot.whleague.win
 - 管理员身份 = 赛事系统的 `admin/superadmin` 账号直接登录竞猜站即得；
 - 普通账号在竞猜站注册页注册（或赛事系统注册后直接登录竞猜站）。
 
-若赛事系统此前配置过 `SETUP_TOKEN`，可删除：
+竞猜 Worker 侧已不再使用 `SETUP_TOKEN`（`/api/setup` 路由与配套 secret 都已删除）。若历史上在竞猜 Worker 上配过，清掉即可：
 
 ```bash
 npx wrangler secret delete SETUP_TOKEN
@@ -141,11 +143,12 @@ npx wrangler secret delete SETUP_TOKEN
 
 ## 六、首次实战验收
 
-1. 发起人建一期竞猜（标题/截止/比赛/玩法项），状态改为开放；
+1. 发起人建一场竞猜（标题/截止/比赛/玩法项），状态改为开放；
 2. 群友在赛事系统登录 → 竞猜页**绑定 QQ**（网页生成绑定码 → QQ 群里向 bot 发码）→ 提交预测（未绑定的账号此时会被 403 拦下并引导去绑定，属预期）；
 3. 截止 → 录比分 → 结算预览（核对每人金额与上限）→ 确认发奖；
-4. ✅ 插件日志出现 `credit payout_id=po-… amount=…`，群里收到战报，`/api/admin/batches/<id>` 显示 `paid`；
-5. 次日 09:00 后：管理台「对账」页应显示 `ok`（或手动 `curl -X POST "https://guess.whleague.win/api/internal/recon" -H "X-Cron-Key: <CRON>"` 立即跑一次）。
+4. ✅ 开放那一刻群里应收到「🎯 新竞猜开放…」通知（admin 建期勾了「立即开放」或点「开放」时入队）；截止前 4 小时会再推一条「⏰ …还有约 4 小时截止」，由插件轮询发出；
+5. ✅ 插件日志出现 `credit payout_id=po-… amount=…`，群里收到战报，`/api/admin/batches/<id>` 显示 `paid`；
+6. 次日 09:00 后：管理台「对账」页应显示 `ok`（或手动 `curl -X POST "https://guess.whleague.win/api/internal/recon" -H "X-Cron-Key: <CRON>"` 立即跑一次）。
 
 ---
 
@@ -163,8 +166,9 @@ npx wrangler secret delete SETUP_TOKEN
 ## 八、故障排查
 
 - **`wrangler d1 create` 提示未登录** → `npx wrangler login` 重走授权。
-- **线上 500** → `npx wrangler secret list` 确认四个 secret 都在；本地 `.dev.vars` 只影响本地。
+- **线上 500** → `npx wrangler secret list` 确认三个 secret（`SYNC_SECRET` / `CRON_SECRET` / `SYNC_BASE_URL`）都在；本地 `.dev.vars` 只影响本地。
 - **发奖全 unknown 但插件正常** → `SYNC_BASE_URL` 是否漏改/多写了尾斜杠；`SYNC_SECRET` 两端是否一致。
-- **战报不发** → 插件是否在轮询 `pending` 且发送成功后才 `ack`；管理台「战报」可查积压。
+- **战报不发** → 插件是否在轮询 `GET /api/reports/pending` 且发送成功后才 `ack`；确认发奖的接口响应里带 `report` 原文，可作为「已入队」的凭据。积压量直接查 worker 的 `report` 表（`status='pending'`）。
+- **群通知不发** → 同上，开放通知/截止提醒和战报共用这个队列，只是 `kind` 不同（`open`/`remind`）；提醒只在截止前 4 小时内触发，开放时已不足 4 小时的竞猜不会再补发（属预期）。
 - **共享登录失效** → 按 5.2 的三点排查（COOKIE_DOMAIN / 子域 / cookie 存在性）。
 - **`wrangler d1 delete` 报错找不到库** → 该命令按 wrangler.jsonc 里的 `database_id` 解析，先把对应 id 填进配置再按名删除。

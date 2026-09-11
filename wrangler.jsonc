@@ -1,5 +1,5 @@
 // WHL 竞猜系统 — 纯 Worker（与赛事系统同构）
-// 部署前先创建 D1 并回填 database_id；secrets：SYNC_SECRET / CRON_SECRET / SETUP_TOKEN / SYNC_BASE_URL
+// 部署前先创建 D1 并回填 database_id；secrets：SYNC_SECRET / CRON_SECRET / SYNC_BASE_URL
 {
   "name": "whl-guess",
   "main": "src/index.ts",

@@ -51,10 +51,13 @@
   不要另立一套余额表。若只能直写表，必须与原插件加锁方式一致（WAL + 同一写入口）。
 - `/sync/credit` 的 balance 字段从该处查询。
 
-### 5. 战报轮询（后台任务）
+### 5. 待发内容轮询（后台任务）
 - 每 60 秒调竞猜系统 `GET /api/reports/pending`（最多 5 条/次），
   把 `content` 原样发到配置指定的 QQ 群；**确认群消息发送成功后**才调
   `POST /api/reports/ack {ids:[...]}`。发送失败不 ack，下次还会拉到。
+- 队列里混有三类内容，用 `kind` 区分：`report`（竞猜战报）、`open`（新竞猜开放通知）、
+  `remind`（截止前 4 小时提醒）。三类都是可直接发群的纯文本、行数只有两三行，
+  **按同一条路径发送即可，不必分支处理**。
 - 目标群号放进插件配置（AstrBot 的 _conf_schema.json），不要硬编码。
 
 ## AstrBot 接入要求
@@ -92,4 +95,4 @@
 
 - **先决事实核对**：Agent 动手前需要两样东西——竞猜系统正式地址（`https://guess.whleague.win`）与 `SYNC_SECRET`（本机 `WHL-Daily-Activities-System/.prod-secrets.txt` 里的 `SYNC_SECRET=` 那行）。插件配好后跑 `npx wrangler secret put SYNC_BASE_URL` 填 `https://astrbot.whleague.win`（Tunnel 域名，见 DEPLOY.md 第四步）。
 - **本地联调顺序**：`.dev.vars` 里 `SYNC_BASE_URL=http://127.0.0.1:9991` → 起插件（9991）→ `npm run dev`（8789）→ `bash scripts/smoke-test.sh`。全绿再上服务器。
-- **上线检查**：Tunnel 存活（DEPLOY.md 4.1 的 401 验证）→ 服务器 secret 改真地址 → 管理台建一期真实竞猜走完整闭环。
+- **上线检查**：Tunnel 存活（DEPLOY.md 4.1 的 401 验证）→ 服务器 secret 改真地址 → 管理台建一场真实竞猜走完整闭环。

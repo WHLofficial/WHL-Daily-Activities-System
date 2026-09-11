@@ -13,18 +13,20 @@
 用户/管理员浏览器 ── Cloudflare Worker（静态 public/ 资源 + API + D1 + 内置 cron）
 AstrBot 插件 ────── HMAC 轮询 /api/bind/claim、/api/reports/pending、/api/reports/ack
 竞猜 Worker ─────── 推送 POST /sync/credit、GET /sync/summary?date= → 插件 HTTP 入口
-内置 cron ────────── 每 5 分钟重试未到账发放项；每天 09:00（UTC+8）对账
+内置 cron ────────── 每 5 分钟重试未到账发放项 + 扫截止前 4 小时的提醒；每天 09:00（UTC+8）对账
 ```
+
+> 群通知（开放通知、截止前提醒）与战报共用 report 队列，用 `kind` 区分，插件侧无需新增接口。详见 [docs/astrbot-sync-api.md](docs/astrbot-sync-api.md)。
 
 ## 目录
 
 ```
-migrations/                 # 0001 初始 17 表 + 0002 账号打通（tour_id/initiators）
+migrations/                 # 0001 初始 17 表 + 0002 账号打通（tour_id/initiators）+ 后续增量
 src/index.ts                # Worker 入口：/api/* → 路由，其余 → 静态资源；scheduled 处理 cron
 src/api.ts                  # 全部 API 路由
-src/_lib/                   # http/auth/judge/sync/report 工具库
+src/_lib/                   # http/auth/judge/sync/report/reward/notify 工具库
 public/                     # 用户端 index.html/app.js + 管理端 admin.html/admin.js
-scripts/smoke-test.sh       # 12 步端到端冒烟测试
+scripts/smoke-test.sh       # 端到端冒烟测试（20+ 步）
 scripts/mock-plugin.js      # 模拟插件 HTTP 服务（联调用）
 docs/astrbot-sync-api.md    # 插件侧对接文档
 ```
@@ -47,7 +49,7 @@ SYNC_SECRET=testsecret node scripts/mock-plugin.js 9991   # 模拟插件
 bash scripts/smoke-test.sh                                # 端到端冒烟（跑完人工核对输出）
 ```
 
-冒烟脚本覆盖：播种赛事库（开放注册+管理员）→ 竞猜注册（开放注册路径）→ 登录 → 建期 → 绑定码认领（含重放拒绝）→ 提交预测 → 截止 → 录比分 → 结算预览（档位/上限）→ 确认发奖 → cron 重试（含错 key 拒绝）→ 每日对账 → 战报拉取 → 数据库核对。
+冒烟脚本覆盖：播种赛事库（开放注册+管理员）→ 前端脚本语法检查 → 登录 → 注册（重名/弱密码拒绝）→ 建期（含已下线题型探针）→ 绑定码认领（含重放拒绝）→ 提交预测（未绑定拒绝）→ 他人答案可见 → 奖励一览（最高可得）→ 截止 → 录比分 → 结算断言（档位/上限/非参与者）→ 确认发奖（幂等 + 并发）→ 无人命中跳过发奖 → 猜胜负三种模式 → cron 重试（含错 key 拒绝）→ 每日对账 → 战报拉取 → 数据库核对 → 强制改密 → 开放通知与截止前提醒。
 
 **Windows 注意**：`wrangler dev` 崩溃后常残留 `workerd.exe` 孤儿进程，重启前先 `taskkill /F /IM workerd.exe`。本地开发用 8789 端口——8788 被历史僵尸连接污染过会一直挂起。
 
