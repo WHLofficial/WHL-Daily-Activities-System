@@ -63,9 +63,12 @@ async function renderList() {
 function tierHint(item) {
   const t = JSON.parse(item.tier_json);
   if (item.type === 'wdl_all') {
-    // 两种计分模式：每中一场固定分，或按命中场数分档（取满足的最高档）
+    // 两种计分模式：每中一场固定分，或按命中场数分档（取满足的最高档）。
+    // 档位最多到命中场数，这里只列真正配了分的，没配的档不显示。
     if (t.mode === 'per_hit') return `每命中一场 +${t.perHit}`;
-    return ['hit1', 'hit2', 'hit3'].filter((k) => t[k]).map((k) => `${TIER_LABEL[k]} +${t[k]}`).join(' · ');
+    return Object.keys(t).filter((k) => /^hit\d+$/.test(k) && t[k])
+      .sort((a, b) => Number(a.slice(3)) - Number(b.slice(3)))
+      .map((k) => `${TIER_LABEL[k] || k} +${t[k]}`).join(' · ');
   }
   return ['score', 'goals', 'wdl', 'fun'].filter((k) => t[k]).map((k) => `${TIER_LABEL[k]} +${t[k]}`).join(' · ');
 }
@@ -114,17 +117,27 @@ function renderMyResult(my, totalAmount, matches) {
       : `本次竞猜我没有得分，全场共发放 ${all} 分`;
   return `
     <div class="banner info">${banner}</div>
-    ${my.items?.map((i) => `
+    ${my.items?.map((i) => {
+      const hn = /^hit(\d+)$/.exec(String(i.tier || ''));
+      const tag = i.hit
+        ? `<span class="hit">命中${hn ? ` ${hn[1]} 场` : ''}</span> +${i.reward}`
+        : '<span class="miss">未命中</span>';
+      return `
       <div class="subitem">
-        ${i.hit ? `<span class="hit">命中</span> +${i.reward}` : '<span class="miss">未命中</span>'}
+        ${tag}
         ${esc(i.question)}，我的答案：${esc(formatContent(i.type, i.content, matches))}
         ${i.hitTiers?.length > 1 ? `<span class="muted">（同时命中 ${i.hitTiers.map((t) => TIER_LABEL[t] || t).join('、')}，取最高档）</span>` : ''}
-      </div>`).join('')}`;
+      </div>`;
+    }).join('')}`;
 }
 
-// 大家的答案：只列昵称与答案。结算后（有 hits）附命中档与得分。
+// 大家的答案：只列昵称与答案。结算后（有 hits）附命中场数与得分。
+// 「猜胜负」覆盖全部场次，纯猜胜负局足有十场，逐场铺开会把名单拉得极长，
+// 所以按人一行，逐场明细收进可展开的 details。
 function renderOthers(d) {
   const others = d.others || [];
+  const single = d.items.filter((i) => i.match_id != null);
+  const cross = d.items.filter((i) => i.match_id == null);
   return `
     <details class="card">
       <summary>大家的答案${others.length ? `（${others.length} 人）` : ''}</summary>
@@ -135,14 +148,33 @@ function renderOthers(d) {
             <b>${esc(o.name)}</b>
             ${o.total != null ? `<span class="badge blue">${o.total} 分</span>` : ''}
           </div>
-          ${d.items.filter((i) => o.items[i.id] !== undefined).map((i) => {
+          ${single.filter((i) => o.items[i.id] !== undefined).map((i) => {
             const m = d.matches.find((x) => x.id === i.match_id) || {};
             const gained = o.hits ? o.hits[i.id] : undefined;
             return `<div class="other-line">
-              <span class="muted">${i.match_id == null ? '全部场次' : `${esc(m.home || '')} vs ${esc(m.away || '')}`}</span>
+              <span class="muted">${esc(m.home || '')} vs ${esc(m.away || '')}</span>
               <span class="grow">${i.question === TYPE_NAME[i.type] ? '' : `${esc(i.question)}：`}${esc(formatContent(i.type, o.items[i.id], d.matches))}</span>
               ${o.hits ? (gained !== undefined ? `<span class="hit">+${gained}</span>` : '<span class="miss">未中</span>') : ''}
             </div>`;
+          }).join('')}
+          ${cross.filter((i) => o.items[i.id] !== undefined).map((i) => {
+            const picked = o.items[i.id] || {};
+            const gained = o.hits ? o.hits[i.id] : undefined;
+            const hits = (o.hitCounts && o.hitCounts[i.id]) || 0;
+            return `<details class="wdl-other">
+              <summary>
+                <span class="muted">${esc(i.question)}</span>
+                <span class="grow">${o.hits
+                  ? `<span class="${gained !== undefined ? 'hit' : 'miss'}">命中 ${hits} 场</span> / 共 ${d.matches.length} 场`
+                  : `已选 ${Object.keys(picked).length} 场 / 共 ${d.matches.length} 场`}</span>
+                ${o.hits ? (gained !== undefined ? `<span class="hit">+${gained}</span>` : '') : ''}
+              </summary>
+              ${d.matches.map((m) => `
+                <div class="other-line">
+                  <span class="muted">${esc(m.home)} vs ${esc(m.away)}</span>
+                  <span class="grow">${WDL_NAME[picked[m.id]] || '<span class="miss">未选</span>'}</span>
+                </div>`).join('')}
+            </details>`;
           }).join('')}
         </div>`).join('')}
     </details>`;
@@ -162,13 +194,14 @@ async function renderDetail(id) {
       </div>
       <div class="muted">
         ${e.status === 'open' ? `截止 ${fmtTime(e.deadline)}（${countdown(e.deadline)}）` : `截止 ${fmtTime(e.deadline)}`}
-        · ${d.participants} 人参与 · 共 ${d.items.length} 题
+        · ${d.participants} 人参与 · ${d.form === 'pure' ? `${d.matches.length} 场比赛` : `共 ${d.items.length} 题`}
       </div>
       ${e.myResult ? renderMyResult(e.myResult, e.totalAmount, d.matches) : ''}
     </div>
     ${canSubmit && me && !me.binding ? `
       <div class="banner warn">提交预测前要先完成 <a href="#/bind">QQ 绑定</a>，绑定后积分才能自动发到你的 QQ 上。</div>` : ''}
-    ${d.matches.map((m) => `
+    ${d.form === 'pure' ? `
+      <div class="banner info">本局共 ${d.matches.length} 场比赛，每场都要选出胜负。猜中的场次越多，得分越高。</div>` : d.matches.map((m) => `
       <div class="card">
         <div class="match-head">
           <h3>${esc(m.home)} vs ${esc(m.away)}</h3>
@@ -188,7 +221,7 @@ async function renderDetail(id) {
           <span class="muted">全部 ${d.matches.length} 场</span>
         </div>
         <div class="item" data-item="${i.id}">
-          <div class="q">每场都要选，按命中场数算分</div>
+          <div class="q">${d.form === 'pure' ? `共 ${d.matches.length} 场，逐场选` : '每场都要选，按命中场数算分'}</div>
           <div class="tier-hint">${tierHint(i)}</div>
           ${itemInput(i, d.myPredictions[i.id], d.matches)}
         </div>

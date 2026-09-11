@@ -106,13 +106,21 @@ async function renderNew() {
       </div>
       <label class="field"><span>开赛时间（可选）</span><input data-f="kickoff" type="datetime-local"></label>
       <div class="i-list"></div>
-      <div class="row mt-s"><button class="ghost small i-add" type="button">＋ 加玩法项</button></div>
+      <div class="row mt-s i-add-row"><button class="ghost small i-add" type="button">＋ 加玩法项</button></div>
     </div>`;
 
   app.innerHTML = `
     <a class="muted" href="#/">← 返回列表</a>
     <div class="card">
       <h3>新建竞猜</h3>
+      <div class="row mt-s">
+        <span class="muted">玩法形式</span>
+        <div class="seg" id="f-form">
+          <label class="on"><input type="radio" name="f-form" value="pure" checked>纯猜胜负</label>
+          <label><input type="radio" name="f-form" value="items">标准</label>
+        </div>
+      </div>
+      <div class="muted" id="f-form-hint"></div>
       <label class="field"><span>标题</span><input id="f-title" maxlength="60" placeholder="如：英超第 3 轮竞猜"></label>
       <label class="field"><span>提交截止时间</span><input id="f-deadline" type="datetime-local"></label>
       <label class="field"><span>玩法项默认奖励上限（单个玩法项发分总数）</span><input id="f-cap" type="number" value="${defCap}"></label>
@@ -120,8 +128,10 @@ async function renderNew() {
       <div id="m-list"></div>
       <div class="row mt-s"><button class="ghost small" id="m-add" type="button">＋ 加一场比赛（最多 3 场）</button></div>
       <div class="card">
-        <label class="field row"><input type="checkbox" id="c-on"> <span>加一个「猜胜负」：覆盖全部场次，按命中场数算分</span></label>
+        <h3>猜胜负</h3>
+        <label class="field row" id="c-on-row"><input type="checkbox" id="c-on"> <span>覆盖全部场次，按命中场数算分</span></label>
         <div id="c-body" hidden>
+          <div class="muted" id="c-lead"></div>
           <label class="field"><span>题目</span><input id="c-q" maxlength="60" placeholder="猜胜负"></label>
           <label class="field"><span>计分方式</span>
             <select id="c-mode">
@@ -140,27 +150,63 @@ async function renderNew() {
   const cOn = document.getElementById('c-on');
   const cBody = document.getElementById('c-body');
   const cMode = document.getElementById('c-mode');
+  const cOnRow = document.getElementById('c-on-row');
+  const cLead = document.getElementById('c-lead');
+  const mAdd = document.getElementById('m-add');
+  const fForm = document.getElementById('f-form');
+  const fHint = document.getElementById('f-form-hint');
+  let form = 'pure';
+  const pickForm = () => fForm.querySelector('input:checked').value;
   // 档位输入框跟着比赛场数和计分方式变：2 场不可能命中 3 场，就别给 hit3 的框
   const drawCrossTiers = () => {
     const n = mList.children.length;
-    const keys = cMode.value === 'per_hit' ? ['perHit'] : ['hit1', 'hit2', 'hit3'].slice(0, n);
-    const def = cMode.value === 'per_hit' ? defT.wdl_all_per_hit : defT.wdl_all;
+    const mode = cMode.value;
+    const keys = mode === 'per_hit' ? ['perHit'] : Array.from({ length: n }, (_, i) => `hit${i + 1}`);
+    const def = mode === 'per_hit' ? defT.wdl_all_per_hit : defT.wdl_all;
+    const tip = mode === 'per_hit'
+      ? ''
+      : '<div class="muted">留空或填 0 表示不设这一档：命中场数没单独设档时，按比它低的一档给分</div>';
     document.getElementById('c-tiers').innerHTML = keys.map((k) =>
-      `<label class="field"><span>${k === 'perHit' ? '每命中一场' : TIER_LABEL[k]} +分</span><input type="number" data-t="${k}" value="${def?.[k] ?? ''}"></label>`).join('');
+      `<label class="field"><span>${k === 'perHit' ? '每命中一场' : TIER_LABEL[k]} +分</span><input type="number" data-t="${k}" value="${def?.[k] ?? ''}" placeholder="0"></label>`).join('') + tip;
   };
   const syncCross = () => {
     const n = mList.children.length;
+    const pure = form === 'pure';
     const ok = n >= 2;
     cOn.disabled = !ok;
-    if (!ok) cOn.checked = false;
+    cOn.checked = pure ? ok : (ok && cOn.checked);
+    cOnRow.hidden = pure;
     cBody.hidden = !cOn.checked;
-    document.getElementById('c-hint').textContent = ok
-      ? `覆盖全部 ${n} 场，最多命中 ${n} 场`
-      : '至少 2 场比赛才能加「猜胜负」';
+    document.getElementById('c-hint').textContent = pure
+      ? (ok ? `本局共 ${n} 场，每场都要选` : '纯猜胜负至少要 2 场比赛')
+      : (ok ? `覆盖全部 ${n} 场，最多命中 ${n} 场` : '至少 2 场比赛才能加「猜胜负」');
+    cLead.textContent = pure ? '本局只有这一道题，每场都要选。' : '';
     if (cOn.checked) drawCrossTiers();
   };
   cOn.onchange = syncCross;
   cMode.onchange = drawCrossTiers;
+  const applyForm = () => {
+    form = pickForm();
+    const pure = form === 'pure';
+    [...mList.children].forEach((card) => {
+      card.querySelector('.i-list').hidden = pure;
+      card.querySelector('.i-add-row').hidden = pure;
+      if (!pure && card.querySelectorAll('.i-row').length === 0) addItem(card.querySelector('.i-list'));
+    });
+    fForm.querySelectorAll('label').forEach((l) => l.classList.toggle('on', l.querySelector('input').checked));
+    fHint.textContent = pure
+      ? '纯猜胜负：一组比赛只出一道题，每场都要选出胜负，按猜中的场数给分。'
+      : '标准：每场比赛可设若干个玩法项，另可加一道覆盖全部场次的「猜胜负」。';
+    mAdd.textContent = pure ? '＋ 加一场比赛（最多 10 场）' : '＋ 加一场比赛（最多 3 场）';
+    syncCross();
+  };
+  fForm.onchange = () => {
+    if (pickForm() === 'items' && mList.children.length > 3) {
+      while (mList.children.length > 3) mList.lastElementChild.remove();
+      toast('标准形式最多 3 场比赛，已保留前 3 场', true);
+    }
+    applyForm();
+  };
   const addItem = (box) => {
     box.insertAdjacentHTML('beforeend', mkItem());
     const row = box.lastElementChild;
@@ -173,28 +219,35 @@ async function renderNew() {
     const card = mList.lastElementChild;
     card.querySelector('.m-del').onclick = () => { card.remove(); syncCross(); };
     card.querySelector('.i-add').onclick = () => addItem(card.querySelector('.i-list'));
-    addItem(card.querySelector('.i-list'));
+    if (form === 'items') addItem(card.querySelector('.i-list'));
     syncCross();
   };
-  document.getElementById('m-add').onclick = () => {
-    if (mList.children.length >= 3) return toast('一场竞猜最多 3 场比赛', true);
+  mAdd.onclick = () => {
+    const max = form === 'pure' ? 10 : 3;
+    if (mList.children.length >= max) {
+      return toast(form === 'pure' ? '纯猜胜负最多 10 场比赛' : '标准形式最多 3 场比赛', true);
+    }
     addMatch();
   };
   addMatch();
+  // 纯猜胜负最少 2 场，开场就给两场，省得先看到一句「至少要 2 场比赛」
+  if (form === 'pure') addMatch();
+  applyForm();
 
   document.getElementById('create').onclick = async () => {
+    const pure = form === 'pure';
     const matches = [...mList.children].map((card) => ({
       home: card.querySelector('[data-f="home"]').value.trim(),
       away: card.querySelector('[data-f="away"]').value.trim(),
       kickoff: card.querySelector('[data-f="kickoff"]').value ? new Date(card.querySelector('[data-f="kickoff"]').value).toISOString() : null,
-      items: [...card.querySelectorAll('.i-row')].map((row) => ({
+      items: pure ? [] : [...card.querySelectorAll('.i-row')].map((row) => ({
         type: row.querySelector('[data-f="type"]').value,
         question: row.querySelector('[data-f="question"]').value.trim(),
         tiers: Object.fromEntries([...row.querySelectorAll('.tier-boxes input')].map((i) => [i.dataset.t, Number(i.value)]).filter(([, n]) => Number.isInteger(n) && n > 0)),
         cap: null,
       })),
     }));
-    const cross = cOn.checked ? {
+    const cross = (pure || cOn.checked) ? {
       type: 'wdl_all',
       question: document.getElementById('c-q').value.trim(),
       tiers: {
@@ -207,6 +260,7 @@ async function renderNew() {
       const r = await api('/admin/events', {
         method: 'POST',
         body: {
+          form: pure ? 'pure' : 'items',
           title: document.getElementById('f-title').value.trim(),
           deadline: new Date(document.getElementById('f-deadline').value).toISOString(),
           rewardCap: Number(document.getElementById('f-cap').value),

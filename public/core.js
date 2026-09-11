@@ -46,7 +46,8 @@ export const STATUS_CLASS = {
 export const TYPE_NAME = { score: '猜比分', wdl: '胜平负', goals: '总进球', fun: '趣味题', wdl_all: '猜胜负' };
 export const TIER_LABEL = {
   score: '比分全中', goals: '总进球', wdl: '胜平负', fun: '趣味命中',
-  hit1: '胜负中 1 场', hit2: '胜负中 2 场', hit3: '胜负中 3 场',
+  // 猜胜负最多 10 场，档位名按命中场数生成，免得每加一场就要手写一条
+  ...Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`hit${i + 1}`, `胜负中 ${i + 1} 场`])),
 };
 // 建期可选题型。不含 goals：独立的「总进球」题型已下线，判分与渲染仍认它，
 // 好让历史竞猜照常显示；想猜总进球，用「猜比分」里的三档。

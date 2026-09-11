@@ -101,6 +101,9 @@ details.card summary { cursor: pointer; font-weight: 600; }
 .seg label { flex: 1; text-align: center; padding: 9px 0; cursor: pointer; font-weight: 600; background: #fff; }
 .seg label.on { background: var(--brand); color: #fff; }
 .seg input { display: none; }
+/* 玩法形式选择：两个词，给固定宽度，别跟着行宽拉伸成两条大色块 */
+#f-form { flex: 0 1 auto; min-width: 220px; }
+#f-form label { padding: 7px 16px; }
 /* 猜胜负：一场一行，左边队名右边主胜/平/客胜 */
 .wdl-all-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; }
 .wdl-all-row .seg { flex: 0 0 210px; }
@@ -125,6 +128,11 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .other + .other { border-top: 1px dashed var(--line); }
 .other-line { display: flex; align-items: baseline; gap: 8px; font-size: 13px; margin: 4px 0 0 14px; }
 .other-line .muted { flex: 0 0 auto; }
+/* 「大家的答案」里「猜胜负」的逐场明细：收在可展开行内，跟别人的答案行同款排版 */
+.wdl-other { margin: 6px 0 0 14px; }
+.wdl-other > summary { display: flex; align-items: baseline; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.wdl-other > summary .grow { font-weight: 400; }
+.wdl-other .other-line { margin-left: 12px; }
 code.kbd { background: #eceef1; border-radius: 6px; padding: 1px 7px; font-size: 13px; }
 
 /* ---------- 提示条与浮层提示 ---------- */
@@ -152,6 +160,9 @@ code.kbd { background: #eceef1; border-radius: 6px; padding: 1px 7px; font-size:
   .card { padding: 16px; }
   .wdl-all-row { flex-wrap: wrap; }
   .wdl-all-row .seg { flex: 1 0 100%; }
+  .wdl-other { margin-left: 8px; }
+  .wdl-other > summary { flex-wrap: wrap; }
+  .wdl-other .other-line { margin-left: 8px; }
   table { white-space: nowrap; }
 }
 
