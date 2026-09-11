@@ -546,6 +546,20 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       }
 
       if (isEventRoute && method === 'POST' && seg[3] === 'confirm') {
+        // 已确认过的竞猜直接回既有批次：双击、并发、确认中途出错后重来都走这里，不再撞 event_id UNIQUE
+        const replyExisting = async (bid: number) => {
+          const n = (await env.DB.prepare('SELECT COUNT(*) AS n FROM payout_item WHERE batch_id = ?')
+            .bind(bid).first()) as any;
+          const dispatch = await dispatchPending(env, bid);
+          return json({
+            ok: true, alreadyConfirmed: true, batchId: bid,
+            payoutCount: Number(n?.n || 0), unbound: [], dispatch,
+          });
+        };
+        const done = (await env.DB.prepare('SELECT id FROM payout_batch WHERE event_id = ?')
+          .bind(eventId).first()) as any;
+        if (done) return replyExisting(done.id);
+
         if (event.status !== 'settled') throw new HttpError(400, '先录结果再确认发奖');
         const body = await readBody(request);
         const st = await env.DB.prepare('SELECT * FROM settlement WHERE event_id = ?').bind(eventId).first() as any;
@@ -570,10 +584,21 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
         const reportText = buildReportText(event, matches, items, actualScores, payable, st.total_amount as number);
 
         const batchTotal = payable.reduce((s: number, d: any) => s + d.total, 0);
-        const br = await env.DB.prepare(
-          'INSERT INTO payout_batch (event_id, status, total_amount) VALUES (?, ?, ?)',
-        ).bind(eventId, 'pending', batchTotal).run();
-        const batchId = br.meta.last_row_id;
+        let batchId: number;
+        try {
+          const br = await env.DB.prepare(
+            'INSERT INTO payout_batch (event_id, status, total_amount) VALUES (?, ?, ?)',
+          ).bind(eventId, 'pending', batchTotal).run();
+          batchId = br.meta.last_row_id as number;
+        } catch (e: any) {
+          // 并发确认：另一个请求已抢先建批次（event_id UNIQUE 拦下本次 INSERT），回既有批次
+          if (String(e?.message || '').includes('UNIQUE')) {
+            const again = (await env.DB.prepare('SELECT id FROM payout_batch WHERE event_id = ?')
+              .bind(eventId).first()) as any;
+            if (again) return replyExisting(again.id);
+          }
+          throw e;
+        }
 
         const stmts: any[] = [];
         const payoutIds: string[] = [];
@@ -619,7 +644,7 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       if (method === 'POST' && seg[1] === 'batches' && seg[3] === 'retry') {
         const batchId = Number(seg[2]);
         await env.DB.prepare(
-          `UPDATE payout_item SET status = 'pending', retry_count = 0, next_retry_at = NULL
+          `UPDATE payout_item SET status = 'pending', retry_count = 0, next_retry_at = NULL, claim_at = NULL
              WHERE batch_id = ? AND status IN ('pending', 'failed', 'exhausted')`,
         ).bind(batchId).run();
         const summary = await dispatchPending(env, batchId);

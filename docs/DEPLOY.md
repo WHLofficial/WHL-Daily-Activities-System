@@ -39,7 +39,9 @@ npx wrangler d1 create whl-guess --location apac
 npx wrangler d1 migrations apply whl-guess --remote
 ```
 
-✅ 验证：输出显示 `0001_init.sql` 和 `0002_tour_auth.sql` 均应用成功。
+✅ 验证：输出显示 4 个迁移（`0001_init.sql` / `0002_tour_auth.sql` / `0003_exhausted.sql` / `0004_payout_claim.sql`）均应用成功。
+
+> 已上线的库加列时，别忘了先 `npx wrangler d1 migrations apply whl-guess --remote` 再 `wrangler deploy`：新代码会用到新列（如 `payout_item.claim_at`）。
 
 ---
 

@@ -350,7 +350,9 @@ async function renderSettlementPreview(d, withConfirm) {
 async function doConfirm(d, overrideCap) {
   try {
     const r = await api(`/admin/events/${d.event.id}/confirm`, { method: 'POST', body: { overrideCap } });
-    toast(`发奖批次已创建：${r.payoutCount} 人，已到账 ${r.dispatch.credited} 笔，待重试 ${r.dispatch.unknown} 笔，失败 ${r.dispatch.failed} 笔`);
+    toast(r.alreadyConfirmed
+      ? `这笔竞猜已发过奖（批次 #${r.batchId}）：本次补发到账 ${r.dispatch.credited} 笔`
+      : `发奖批次已创建：${r.payoutCount} 人，已到账 ${r.dispatch.credited} 笔，待重试 ${r.dispatch.unknown} 笔，失败 ${r.dispatch.failed} 笔`);
     if (r.unbound?.length) toast(`未绑定 QQ，未发奖：${r.unbound.join('、')}`, true);
     renderManage(d.event.id);
   } catch (e) {

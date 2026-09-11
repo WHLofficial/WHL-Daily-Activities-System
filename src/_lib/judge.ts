@@ -30,6 +30,8 @@ export function computeSettlement(
   const actualByMatch = new Map<number, { home: number; away: number }>(
     input.results.map((r) => [r.matchId, { home: r.home, away: r.away }]),
   );
+  // 趣味题命中的判分在「已提交该玩法项的预测」循环内进行：没有提交记录的 user_id
+  // 进不了循环，即便出现在 hits 名单里也拿不到分（名单里多出非参与者是空操作，不是漏洞）。
   const funHits = new Map<number, Set<number>>(input.fun.map((f) => [f.itemId, new Set(f.hits)]));
 
   const perUser = new Map<number, { user_id: number; name: string; total: number; items: any[] }>();

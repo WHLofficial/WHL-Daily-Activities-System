@@ -9,6 +9,8 @@ import { nowSql } from './http.ts';
 
 const BACKOFF_MIN = [1, 5, 15, 60];
 const MAX_RETRY = 5;
+// 认领锁有效期：单条派发最多一次 10 秒 HTTP，超过 5 分钟视为上一轮进程已死，可被重新认领
+const CLAIM_STALE_MS = 5 * 60_000;
 
 export async function signAndFetch(
   env: any, method: 'GET' | 'POST', pathWithQuery: string, bodyObj: any = undefined, timeoutMs = 10_000,
@@ -61,17 +63,17 @@ export async function creditPayoutItem(env: any, item: any, attempt: number): Pr
   let updateSql: string;
   let args: any[];
   if (outcome === 'credited' || outcome === 'duplicate') {
-    updateSql = `UPDATE payout_item SET status='credited', credited_at=?, last_error=? WHERE id=?`;
+    updateSql = `UPDATE payout_item SET status='credited', credited_at=?, last_error=?, claim_at=NULL WHERE id=?`;
     args = [nowSql(), detail, item.id];
   } else if (outcome === 'failed') {
-    updateSql = `UPDATE payout_item SET status='failed', last_error=? WHERE id=?`;
+    updateSql = `UPDATE payout_item SET status='failed', last_error=?, claim_at=NULL WHERE id=?`;
     args = [detail, item.id];
   } else if (attempt >= MAX_RETRY) {
     // 重试耗尽：停自动重试转人工；批次「重试」按钮可重新拉起（exhausted → pending）
-    updateSql = `UPDATE payout_item SET status='exhausted', last_error=? WHERE id=?`;
+    updateSql = `UPDATE payout_item SET status='exhausted', last_error=?, claim_at=NULL WHERE id=?`;
     args = [detail, item.id];
   } else {
-    updateSql = `UPDATE payout_item SET retry_count=?, last_error=?, next_retry_at=? WHERE id=?`;
+    updateSql = `UPDATE payout_item SET retry_count=?, last_error=?, next_retry_at=?, claim_at=NULL WHERE id=?`;
     args = [
       attempt, detail,
       new Date(Date.now() + BACKOFF_MIN[Math.min(attempt - 1, BACKOFF_MIN.length - 1)] * 60_000)
@@ -89,17 +91,26 @@ export async function creditPayoutItem(env: any, item: any, attempt: number): Pr
 
 /** 扫描到期未发的发放项并逐条派发（发奖确认 / 手动重试 / cron 共用）。 */
 export async function dispatchPending(env: any, batchId?: number) {
+  const nowIso = new Date().toISOString();
+  const staleIso = new Date(Date.now() - CLAIM_STALE_MS).toISOString();
   const items = (await env.DB.prepare(
     `SELECT pi.*, e.id AS event_id FROM payout_item pi
        JOIN payout_batch b ON b.id = pi.batch_id JOIN event e ON e.id = b.event_id
       WHERE pi.status = 'pending' AND pi.retry_count < ${MAX_RETRY}
         AND (pi.next_retry_at IS NULL OR pi.next_retry_at <= ?)
+        AND (pi.claim_at IS NULL OR pi.claim_at < ?)
         ${batchId ? 'AND pi.batch_id = ?' : ''}
       ORDER BY pi.id`,
-  ).bind(...(batchId ? [new Date().toISOString(), batchId] : [new Date().toISOString()])).all()).results;
+  ).bind(...(batchId ? [nowIso, staleIso, batchId] : [nowIso, staleIso])).all()).results;
 
-  let credited = 0, duplicate = 0, unknown = 0, failed = 0;
+  let credited = 0, duplicate = 0, unknown = 0, failed = 0, skipped = 0;
   for (const item of items) {
+    // 原子抢锁：并发派发时只有抢到的那个进程真正调用插件，抢不到的直接跳过
+    const claim = await env.DB.prepare(
+      `UPDATE payout_item SET claim_at = ? WHERE id = ? AND status = 'pending'
+         AND (claim_at IS NULL OR claim_at < ?)`,
+    ).bind(nowIso, item.id, staleIso).run();
+    if (claim.meta.changes !== 1) { skipped++; continue; }
     const outcome = await creditPayoutItem(env, item, item.retry_count + 1);
     if (outcome === 'credited') credited++;
     else if (outcome === 'duplicate') duplicate++;
@@ -121,5 +132,5 @@ export async function dispatchPending(env: any, batchId?: number) {
       : failedN > 0 && creditedN < total ? 'partial' : 'paid';
     await env.DB.prepare('UPDATE payout_batch SET status = ? WHERE id = ?').bind(status, id).run();
   }
-  return { total: items.length, credited, duplicate, unknown, failed };
+  return { total: items.length, credited, duplicate, unknown, failed, skipped };
 }

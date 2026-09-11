@@ -101,7 +101,7 @@ GET  /sync/summary?date=   （按人汇总，对账用）
 | prediction（预测） | id, 玩法项id, 用户id, 答案内容, 提交/修改时间; **唯一(玩法项,用户)** | 防一人多份 |
 | settlement（结算） | id, event_id, 实际比分, 各玩法判定明细, 计算时间, 确认人 | |
 | payout_batch（发放批次） | id, event_id, 状态, 总额 | |
-| payout_item（发放项） | id, 批次id, 用户id, 金额, 明细, **payout_id(全局唯一/幂等键)**, 状态(待发/已发/重复/失败/已冲正) | |
+| payout_item（发放项） | id, 批次id, 用户id, 金额, 明细, **payout_id(全局唯一/幂等键)**, 状态(待发/已发/失败/已冲正/重试耗尽), retry_count, next_retry_at, last_error, **claim_at(派发认领锁)** | |
 | sync_log（同步日志） | payout_id, 请求摘要, 响应, 错误, 重试次数, 下次重试时间 | |
 | ledger_mirror（流水镜像） | id, payout_id, qq_id, 金额(正/负), 类型(奖励/冲正, 预留押金/退款), event_id | 竞猜侧账本，对账本地依据 |
 | report（战报） | id(唯一), event_id, 内容, 状态(待发/已发) | |
@@ -131,6 +131,12 @@ GET  /sync/summary?date=   （按人汇总，对账用）
 | 发奖 | batch 原子写 payout_batch + payout_item + ledger_mirror → 逐条 credited → 批次「已发奖」→ report 置「待发」 |
 | 冲正 | 新增反向 payout_item + 镜像（type=reversal），原项标「已冲正」 |
 | 对账 | 写 recon_run |
+
+### 发奖防重的三层保险
+
+1. **一笔竞猜一个批次**：`payout_batch.event_id` 唯一。重复确认（双击、并发、确认后重来）不再报错——先查既有批次，命中就直接返回 `alreadyConfirmed` 并补一次派发；INSERT 撞唯一约束也走同一分支。
+2. **一笔发放一个幂等键**：`payout_item.payout_id` 全局唯一，插件侧按此去重并回 `duplicate`，网站把 duplicate 视同到账。
+3. **派发认领锁**：`payout_item.claim_at`。确认发奖、手动重试、cron 三条路径可能同时扫到同一批待发项，派发前先原子抢锁（`UPDATE payout_item SET claim_at=? WHERE id=? AND status='pending' AND (claim_at IS NULL OR claim_at < ?)`），`meta.changes` 不为 1 就跳过；落库时释放。锁超过 5 分钟视为上一轮进程已死，可被重新认领。
 
 ## 四、身份打通（已实现，2026-09-08）
 
