@@ -341,7 +341,16 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       if (method === 'GET' && seg[1] === 'defaults') {
         const rows = (await env.DB.prepare('SELECT key, value FROM settings').all()).results as any[];
         const s = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-        return json({ tiers: JSON.parse(s.default_tiers || '{}'), rewardCap: Number(s.reward_cap_default || 1000) });
+        // settings 里存的是扁平默认值 {"score":300,"goals":100,"wdl":50,"fun":50}，
+        // 建期页按题型取档位（drawTiers 用 def[键]），所以在这一层展开成按题型分档的形状。
+        const flat = JSON.parse(s.default_tiers || '{}') as Record<string, number>;
+        const tiers = {
+          score: { score: flat.score ?? 300, goals: flat.goals ?? 100, wdl: flat.wdl ?? 50 },
+          wdl: { wdl: flat.wdl ?? 50 },
+          goals: { goals: flat.goals ?? 100 },
+          fun: { fun: flat.fun ?? 50 },
+        };
+        return json({ tiers, rewardCap: Number(s.reward_cap_default || 1000) });
       }
 
       // 账号列表（含赛事系统镜像标记与发起人状态）
