@@ -1,7 +1,7 @@
 // 管理端 SPA：新建竞猜 / 状态流转 / 录结果 / 结算预览 / 确认发奖 / 批次状态 / 冲正 / 对账
 import {
   api, fmtTime, countdown, STATUS_LABEL, STATUS_CLASS, esc, toast,
-  TYPE_NAME, TIER_LABEL, ROLE_NAME, formatContent, roleLabel,
+  TYPE_NAME, TIER_LABEL, CREATE_TYPES, ROLE_NAME, formatContent, roleLabel,
   BATCH_STATUS, PAYOUT_STATUS, statusPill, PASSWORD_FORM, wirePassword,
 } from './core.js';
 
@@ -87,7 +87,7 @@ async function renderNew() {
     <div class="item i-row">
       <div class="row">
         <select class="type-select" data-f="type">
-          ${Object.entries(TYPE_NAME).map(([val, label]) => `<option value="${val}" ${t.type === val ? 'selected' : ''}>${label}</option>`).join('')}
+          ${CREATE_TYPES.map((val) => `<option value="${val}" ${t.type === val ? 'selected' : ''}>${TYPE_NAME[val]}</option>`).join('')}
         </select>
         <input class="grow" data-f="question" placeholder="题目（可留空用默认）" value="${esc(t.question)}">
         <button class="ghost small i-del" type="button">删</button>

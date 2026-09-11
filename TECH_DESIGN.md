@@ -97,7 +97,7 @@ GET  /sync/summary?date=   （按人汇总，对账用）
 | user_binding | id, 赛事系统账号id, **qq_id(唯一)**, 状态, 时间 | Web 账号 ↔ QQ 映射 |
 | event（竞猜期） | id, 标题, 状态(草稿/开放/截止/已结算/已发奖/归档), 发起人, 截止时间, 单场奖励上限 | |
 | match（场次） | id, event_id, 主队, 客队, 开赛时间, 状态 | 属于某个竞猜期 |
-| play_item（玩法项） | id, match_id, 类型(比分/胜平负/总进球/趣味), 题目, 默认档位, 覆盖档位, 奖励上限 | 一场比赛多个玩法项 |
+| play_item（玩法项） | id, match_id, 类型(比分/胜平负/趣味；goals 仅兼容历史数据), 题目, 默认档位, 覆盖档位, 奖励上限 | 一场比赛多个玩法项 |
 | prediction（预测） | id, 玩法项id, 用户id, 答案内容, 提交/修改时间; **唯一(玩法项,用户)** | 防一人多份 |
 | settlement（结算） | id, event_id, 实际比分, 各玩法判定明细, 计算时间, 确认人 | |
 | payout_batch（发放批次） | id, event_id, 状态, 总额 | |

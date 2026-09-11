@@ -409,7 +409,8 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
           for (let i = 0; i < items.length; i++) {
             const it = items[i];
             const type = String(it.type);
-            if (!['score', 'wdl', 'goals', 'fun'].includes(type)) throw new HttpError(400, `未知玩法类型 ${type}`);
+            if (type === 'goals') throw new HttpError(400, '「总进球」已并入「猜比分」的三档，不再作为独立玩法项');
+            if (!['score', 'wdl', 'fun'].includes(type)) throw new HttpError(400, `未知玩法类型 ${type}`);
             const question = String(it.question || '').trim() || { score: '猜比分', wdl: '胜平负', goals: '总进球', fun: '趣味题' }[type];
             itemRows.push({ mi, type, question, tierJson: validateTiers(type, it.tiers), cap: it.cap ? Number(it.cap) : null, sort: i });
           }

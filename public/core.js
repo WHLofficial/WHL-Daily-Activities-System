@@ -45,6 +45,9 @@ export const STATUS_CLASS = {
 // 题型与档位：全站唯一来源，防止各视图各叫一套
 export const TYPE_NAME = { score: '猜比分', wdl: '胜平负', goals: '总进球', fun: '趣味题' };
 export const TIER_LABEL = { score: '比分全中', goals: '总进球', wdl: '胜平负', fun: '趣味命中' };
+// 建期可选题型。不含 goals：独立的「总进球」题型已下线，判分与渲染仍认它，
+// 好让历史竞猜照常显示；想猜总进球，用「猜比分」里的三档。
+export const CREATE_TYPES = ['score', 'wdl', 'fun'];
 
 // 角色名与身份徽章：管理员（赛事系统管理员）/ 发起人 / 普通用户
 export const ROLE_NAME = { admin: '管理员', superadmin: '管理员', coach: '普通用户', user: '普通用户' };
