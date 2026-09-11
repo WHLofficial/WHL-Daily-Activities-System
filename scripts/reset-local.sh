@@ -23,6 +23,11 @@ npx wrangler d1 execute whl-guess --local --command "$SQL" 2>&1 | grep -E '"succ
 echo "== 清空赛事本地库的冒烟账号（保留 smboss 与 organization #1）=="
 npx wrangler d1 execute whl --local --command "DELETE FROM user WHERE name LIKE 'sm%' AND name <> 'smboss'" 2>&1 | grep -E '"success"|error' | head -2
 
+echo "== 预置「密码被管理员重置」账号 sm4（must_change_pw=1，冒烟步 16 用）=="
+# 必须在 dev 启动【前】写：dev 运行中跑 d1 execute 的写操作会锁库静默失败
+SM4_HASH=$(node scripts/gen-tour-hash.mjs pass4444)
+npx wrangler d1 execute whl --local --command "INSERT OR REPLACE INTO user (name,password_hash,role,locked,must_change_pw) VALUES ('sm4','$SM4_HASH','coach',0,1)" 2>&1 | grep -E '"success"|error' | head -2
+
 echo "== 清空本地 SESSION_KV（会话与注册/登录限流计数都在这）=="
 rm -rf .wrangler/state/v3/kv/*
 echo

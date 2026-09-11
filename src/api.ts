@@ -5,7 +5,7 @@ import { HttpError, json, readBody, nowISO } from './_lib/http.ts';
 import {
   sha256hex, createSession, sessionCookie, clearSessionCookie,
   getAuthUser, requireUser, requireRole, requireManager, isInitiator, verifyPluginRequest, assertCronKey,
-  rateLimit, mirrorTourUser,
+  rateLimit, mirrorTourUser, requirePwChanged,
 } from './_lib/auth.ts';
 import { sha256Hex, tourHashPassword, tourVerifyPassword } from './_lib/tourcrypto.ts';
 import { computeSettlement, type ResultInput } from './_lib/judge.ts';
@@ -171,6 +171,12 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
     }
 
     // ---------- 认证 ----------
+    // 被管理员重置过密码的账号（赛事库 must_change_pw=1）：除登录/注册/登出/改密/查看自身状态外
+    // 一律拦下，前端据此把人引导到改密页（与赛事系统 worker/middleware/auth.ts 同规则）。
+    const pwGate =
+      (method === 'POST' && (seg[0] === 'login' || seg[0] === 'register' || seg[0] === 'logout' || seg[0] === 'password')) ||
+      (method === 'GET' && seg[0] === 'me');
+    if (!pwGate) await requirePwChanged(env, request);
     // 注册：账号真源在赛事系统 user 表（写入即全站通用），校验规则与赛事系统 /register 逐字一致。
     // 门槛与赛事系统同一套：注册码优先；无码需组织 allow_open_reg 开关放开，产生 locked=1 观众号。
     if (method === 'POST' && seg[0] === 'register') {
@@ -249,7 +255,8 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
     }
 
     // 登录：验密走赛事系统 user 表（共享账号池，两边注册的账号互通），本地只建会话。
-    // must_change_pw=1 与赛事系统同规则：视为不可登录，需先回赛事系统改密。
+    // must_change_pw=1 与赛事系统同规则：照常登录并建会话，但响应带 mustChangePassword，
+    // 由前端强制引导到改密页，其余业务接口由 requirePwChanged 拦下。
     if (method === 'POST' && seg[0] === 'login') {
       if (!env.TOUR_DB) throw new HttpError(500, '未配置赛事库');
       const ip = request.headers.get('CF-Connecting-IP') || 'local';
@@ -264,10 +271,13 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       if (!tour || !(await tourVerifyPassword(String(body.password ?? ''), tour.password_hash))) {
         throw new HttpError(401, '昵称或密码不正确');
       }
-      if (tour.must_change_pw === 1) throw new HttpError(403, '该账号需先修改密码，请到赛事系统登录修改');
       const local = await mirrorTourUser(env, tour);
       const token = await createSession(env, local.id);
-      return json({ ok: true, role: local.role }, 200, { 'Set-Cookie': sessionCookie(token) });
+      return json(
+        { ok: true, role: local.role, mustChangePassword: tour.must_change_pw === 1 },
+        200,
+        { 'Set-Cookie': sessionCookie(token) },
+      );
     }
 
     if (method === 'POST' && seg[0] === 'logout') {
@@ -282,7 +292,7 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       const binding = await env.DB.prepare('SELECT qq_id, bound_at FROM user_binding WHERE user_id = ?').bind(user.id).first();
       // 发起人标记：role=user 但在发起人名单内，前端据此放行管理台
       const isInit = user.role === 'admin' ? true : await isInitiator(env, user.id);
-      return json({ user, binding: binding || null, is_initiator: isInit });
+      return json({ user, binding: binding || null, is_initiator: isInit, mustChangePassword: !!user.mustChangePw });
     }
 
     if (method === 'POST' && seg[0] === 'bind' && seg[1] === 'new') {

@@ -534,9 +534,11 @@ document.getElementById('nav-logout').onclick = async () => {
 };
 
 // ---------- 改密码 ----------
-function renderPassword() {
-  app.innerHTML = `<a class="muted" href="#/">← 返回</a><div class="card">${PASSWORD_FORM}</div>`;
-  wirePassword(app, () => { location.hash = '#/'; });
+function renderPassword(forced = false) {
+  app.innerHTML = `${forced
+    ? '<div class="banner warn">密码刚被重置，请先设置新密码。改完才能继续用。</div>'
+    : '<a class="muted" href="#/">← 返回</a>'}<div class="card">${PASSWORD_FORM}</div>`;
+  wirePassword(app, async () => { me = await api('/me'); location.hash = '#/'; });
 }
 
 // ---------- 框架 ----------
@@ -562,6 +564,12 @@ function route() {
     app.innerHTML = '<div class="banner bad">没有权限访问管理台</div>';
     return;
   }
+  // 被管理员重置过密码：先去改密（服务端也会拦下业务接口）
+  if (me.mustChangePassword) {
+    if (location.hash !== '#/password') { location.hash = '#/password'; return; }
+    renderPassword(true);
+    return;
+  }
   const h = location.hash || '#/';
   if (h.startsWith('#/manage/')) renderManage(Number(h.split('/')[2])).catch(showErr);
   else if (h.startsWith('#/batch/')) renderBatch(Number(h.split('/')[2])).catch(showErr);
@@ -571,6 +579,11 @@ function route() {
   else renderEvents().catch(showErr);
 }
 function showErr(e) {
+  if (e.code === 'password_change_required') {
+    me = { ...(me || {}), mustChangePassword: true };
+    if (location.hash === '#/password') route(); else location.hash = '#/password';
+    return;
+  }
   app.innerHTML = `<div class="banner bad">${esc(e.message)}</div><a class="muted" href="#/">← 返回</a>`;
 }
 

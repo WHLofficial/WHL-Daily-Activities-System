@@ -5,6 +5,8 @@
 #   b) 赛事本地库播种（必须在 dev 启动【前】执行——dev 运行中跑 d1 execute 会锁库静默失败）：
 #      npx wrangler d1 execute whl --local --command "INSERT INTO organization (id,name,allow_open_reg) VALUES (1,'WHL',1) ON CONFLICT(id) DO UPDATE SET allow_open_reg=1"
 #      npx wrangler d1 execute whl --local --command "INSERT OR IGNORE INTO user (name,password_hash,role) VALUES ('smboss','$(node scripts/gen-tour-hash.mjs secret123)','admin')"
+#      # 步 16 用的「被管理员重置密码」账号（reset-local.sh 也会自动预置）
+#      npx wrangler d1 execute whl --local --command "INSERT OR REPLACE INTO user (name,password_hash,role,locked,must_change_pw) VALUES ('sm4','$(node scripts/gen-tour-hash.mjs pass4444)','coach',0,1)"
 #   c) dev 服务已起（npx wrangler dev --port 8789，.dev.vars 提供测试密钥）
 # 验证：播种→注册（自动登录）→验密登录→开放竞猜→HMAC 绑定→提交预测→截止→录结果→结算→确认发奖（发往不可达地址→unknown）→cron 重试→对账
 set -e
@@ -497,6 +499,45 @@ node -e '
     }
   });
 ' "$SECRET" "$BASE"
+
+say "16. 强制改密：被管理员重置密码的账号在本站内改密（不再赶去赛事系统）"
+# sm4 由 reset-local.sh 预置成 must_change_pw=1（该标记只能在 dev 启动前写赛事本地库）
+U4="$SMOKE_TMP"/whl-u4.jar
+LOGIN4=$(curl -sf -c "$U4" -X POST "$BASE/api/login" -H 'Content-Type: application/json' -d '{"username":"sm4","password":"pass4444"}')
+echo "  login: $LOGIN4"
+curl -sf -b "$U4" "$BASE/api/me" > "$SMOKE_TMP"/whl-me4.json
+echo "  me: $(cat "$SMOKE_TMP"/whl-me4.json)"
+ok "未改密时应能看自身状态、但业务接口被拦下（403 password_change_required）："
+GATE4=$(curl -s -b "$U4" -w '\n%{http_code}' "$BASE/api/events")
+echo "$GATE4"
+ok "旧密码不对应被拒："
+curl -s -b "$U4" -X POST "$BASE/api/password" -H 'Content-Type: application/json' -d '{"oldPassword":"wrongold1","newPassword":"pass5555"}'; echo
+ok "新密码太弱应被拒："
+curl -s -b "$U4" -X POST "$BASE/api/password" -H 'Content-Type: application/json' -d '{"oldPassword":"pass4444","newPassword":"short1"}'; echo
+CHG4=$(curl -sf -b "$U4" -X POST "$BASE/api/password" -H 'Content-Type: application/json' -d '{"oldPassword":"pass4444","newPassword":"pass5555"}')
+echo "  password: $CHG4"
+curl -sf -b "$U4" "$BASE/api/me" > "$SMOKE_TMP"/whl-me4-2.json
+AFTER4=$(curl -s -o /dev/null -w '%{http_code}' -b "$U4" "$BASE/api/events")
+ok "改密后业务接口恢复：GET /api/events → $AFTER4"
+ok "旧密码应失效："
+curl -s -X POST "$BASE/api/login" -H 'Content-Type: application/json' -d '{"username":"sm4","password":"pass4444"}'; echo
+NEWLOGIN4=$(curl -sf -c "$SMOKE_TMP"/whl-u4b.jar -X POST "$BASE/api/login" -H 'Content-Type: application/json' -d '{"username":"sm4","password":"pass5555"}')
+echo "  relogin: $NEWLOGIN4"
+node -e '
+  const fs = require("fs");
+  const rd = (p) => JSON.parse(fs.readFileSync(process.env.SMOKE_TMP + p, "utf8"));
+  const login = JSON.parse(process.argv[1]), relogin = JSON.parse(process.argv[3]);
+  const me = rd("/whl-me4.json"), me2 = rd("/whl-me4-2.json");
+  const [gate, code] = process.argv[2].split("\n");
+  const assert = (c, m) => { if (!c) { console.error("  ✗ " + m); process.exit(1); } console.log("  ✓ " + m); };
+  assert(login.ok === true && login.mustChangePassword === true, "重置账号能登录，且响应带 mustChangePassword 标记");
+  assert(!!me.user && Number(me.user.id) > 0, "/api/me 在未改密时仍放行（白名单）");
+  assert(me.mustChangePassword === true, "/api/me 带 mustChangePassword=true");
+  assert(code === "403" && JSON.parse(gate).error === "password_change_required", `业务接口 403 password_change_required（实得 ${code}/${JSON.parse(gate).error}）`);
+  assert(me2.mustChangePassword === false, "改密后 /api/me 标记清零");
+  assert(relogin.ok === true && relogin.mustChangePassword === false, "新密码可登录且不再要求改密（已写回共享账号池）");
+' "$LOGIN4" "$GATE4" "$NEWLOGIN4"
+if [ "$AFTER4" = "200" ]; then ok "改密后 GET /api/events 200"; else echo "  ✗ 改密后 GET /api/events 期望 200，实得 $AFTER4"; exit 1; fi
 
 echo
 echo "✅ 冒烟测试跑完，请人工核对上方各步骤返回与期望值"

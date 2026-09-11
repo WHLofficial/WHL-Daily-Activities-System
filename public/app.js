@@ -311,9 +311,11 @@ async function renderBind() {
 }
 
 // ---------- 改密码 ----------
-function renderPassword() {
-  app.innerHTML = `<a class="muted" href="#/">← 返回</a><div class="card">${PASSWORD_FORM}</div>`;
-  wirePassword(app, () => { location.hash = '#/'; });
+function renderPassword(forced = false) {
+  app.innerHTML = `${forced
+    ? '<div class="banner warn">密码刚被重置，请先设置新密码。改完才能继续用。</div>'
+    : '<a class="muted" href="#/">← 返回</a>'}<div class="card">${PASSWORD_FORM}</div>`;
+  wirePassword(app, async () => { await loadMe(); location.hash = '#/'; });
 }
 
 // ---------- 顶栏 ----------
@@ -357,6 +359,12 @@ async function loadMe() { me = await api('/me'); }
 function route() {
   renderTopbar();
   if (!me?.user) { renderLogin(location.hash === '#/register' ? 'register' : 'login'); return; }
+  // 被管理员重置过密码：先去改密，别处都进不去（服务端也会拦下业务接口）
+  if (me.mustChangePassword) {
+    if (location.hash !== '#/password') { location.hash = '#/password'; return; }
+    renderPassword(true);
+    return;
+  }
   const h = location.hash || '#/';
   if (h.startsWith('#/event/')) renderDetail(Number(h.split('/')[2])).catch(showErr);
   else if (h === '#/bind') renderBind().catch(showErr);
@@ -364,6 +372,11 @@ function route() {
   else renderList().catch(showErr);
 }
 function showErr(e) {
+  if (e.code === 'password_change_required') {
+    me = { ...(me || {}), mustChangePassword: true };
+    if (location.hash === '#/password') route(); else location.hash = '#/password';
+    return;
+  }
   app.innerHTML = `<div class="banner bad">${esc(e.message)}</div><a class="muted" href="#/">← 返回</a>`;
 }
 

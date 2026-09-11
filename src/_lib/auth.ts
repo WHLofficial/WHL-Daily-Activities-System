@@ -65,7 +65,8 @@ function getCookie(request: Request, name: string): string | null {
 //   sess:<token> -> {"userId":n}。已登录比赛平台的用户打开竞猜站自动镜像登录。
 // 角色映射：admin/superadmin -> admin；coach（含 locked=1 的观众号）-> user。
 // locked 是赛事系统「未解锁绑队」的观众号，不是封禁 —— 放行；
-// must_change_pw 视为未登录（需先回赛事系统改密）。
+// must_change_pw=1（被管理员重置过密码）照常登录，但除改密/登出/查看自身状态外一律 403，
+// 由 requirePwChanged 统一拦下（与赛事系统 worker/middleware/auth.ts 同规则）。
 const TOUR_COOKIE = 'whl_session';
 
 // KV 固定窗口限流（与赛事系统 worker/lib/ratelimit.ts 同款；KV 最终一致，窗口边界少量超发对朋友局可接受）
@@ -102,8 +103,8 @@ async function getTourSessionUser(env: any, request: Request): Promise<any | nul
     'SELECT id, name, role, locked, must_change_pw FROM user WHERE id = ?',
   ).bind(userId).first() as any;
   if (!tour) return null;
-  if (tour.must_change_pw === 1) return null;
-  return mirrorTourUser(env, tour);
+  const local = await mirrorTourUser(env, tour);
+  return { ...local, mustChangePw: tour.must_change_pw === 1 };
 }
 
 export async function getAuthUser(env: any, request: Request): Promise<any | null> {
@@ -114,11 +115,20 @@ export async function getAuthUser(env: any, request: Request): Promise<any | nul
   if (tour) return tour;
   const token = getCookie(request, SESSION_COOKIE);
   if (!token) return null;
-  return env.DB.prepare(
+  const local = await env.DB.prepare(
     `SELECT u.id, u.tour_id, u.username, u.display_name, u.role
        FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = ? AND s.expires_at > ?`,
-  ).bind(await sha256hex(token), new Date().toISOString()).first();
+  ).bind(await sha256hex(token), new Date().toISOString()).first() as any;
+  if (!local) return null;
+  // 本地会话也要问一次赛事库：管理员重置密码后，旧会话同样该被拦去改密
+  return { ...local, mustChangePw: await tourMustChangePw(env, local.tour_id) };
+}
+
+async function tourMustChangePw(env: any, tourId: number | null): Promise<boolean> {
+  if (!env.TOUR_DB || !tourId) return false;
+  const row = await env.TOUR_DB.prepare('SELECT must_change_pw FROM user WHERE id = ?').bind(tourId).first() as any;
+  return row?.must_change_pw === 1;
 }
 
 export async function isInitiator(env: any, userId: number): Promise<boolean> {
@@ -139,6 +149,14 @@ export async function requireUser(env: any, request: Request): Promise<any> {
   const user = await getAuthUser(env, request);
   if (!user) throw new HttpError(401, '未登录');
   return user;
+}
+
+// 被重置过密码的账号：业务接口前统一拦下，只放行改密/登出/查看自身状态这几条入口
+export async function requirePwChanged(env: any, request: Request): Promise<void> {
+  const user = await getAuthUser(env, request);
+  if (user?.mustChangePw) {
+    throw new HttpError(403, '密码刚被重置，请先设置新密码', 'password_change_required');
+  }
 }
 
 export async function requireRole(env: any, request: Request, roles: string[]): Promise<any> {
