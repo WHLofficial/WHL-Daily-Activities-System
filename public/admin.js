@@ -53,6 +53,7 @@ async function renderEvents() {
     try {
       const { users } = await api('/admin/users');
       initBox.innerHTML = users.length === 0 ? '<div class="empty">还没有账号</div>' : `
+        <div class="table-wrap">
         <table>
           <tr><th>编号</th><th>昵称</th><th>角色</th><th>来源</th><th>QQ</th><th>发起人</th></tr>
           ${users.map((u) => `
@@ -64,7 +65,8 @@ async function renderEvents() {
               <td>${u.bound ? '已绑定' : '—'}</td>
               <td><button class="link" data-init="${u.id}" data-on="${u.is_initiator ? 0 : 1}">${u.is_initiator ? '取消发起人' : '设为发起人'}</button></td>
             </tr>`).join('')}
-        </table>`;
+        </table>
+        </div>`;
       initBox.querySelectorAll('[data-init]').forEach((btn) => {
         btn.onclick = async () => {
           try {
@@ -235,7 +237,8 @@ async function showBatchInto(container, batchId) {
       </div>
       <div class="muted">共 ${batch.total_amount} 分 · 创建于 ${fmtTime(batch.created_at)}</div>
       <div class="row mt-s"><button class="ghost small" id="retry">重试未到账与失败项</button></div>
-      <table class="mt-s">
+      <div class="table-wrap mt-s">
+      <table>
         <tr><th>账号</th><th>QQ</th><th class="num">积分</th><th>状态</th><th>备注</th><th></th></tr>
         ${items.map((i) => `
           <tr>
@@ -246,6 +249,7 @@ async function showBatchInto(container, batchId) {
             <td>${i.status === 'credited' ? `<button class="ghost small" data-rev="${esc(i.payout_id)}">冲正</button>` : ''}</td>
           </tr>`).join('')}
       </table>
+      </div>
     </div>`;
   container.querySelector('#retry').onclick = async () => {
     try {
@@ -329,6 +333,7 @@ async function renderSettlementPreview(d, withConfirm) {
       <h3>结算预览 · 共 ${st.total} 分</h3>
       ${breaches.length ? `<div class="banner warn">超上限玩法项：${breaches.map((b) => `${esc(b.question)}（${b.total}/${b.cap}）`).join('、')}。确认发奖前请勾选「知晓超限」。</div>` : ''}
       ${noHit ? '<div class="banner info">本次无人命中，确认后直接结案，不会生成发放批次。</div>' : ''}
+      <div class="table-wrap">
       <table>
         <tr><th>账号</th><th>QQ</th><th class="num">积分</th><th>明细</th></tr>
         ${st.detail.map((row) => `
@@ -340,6 +345,7 @@ async function renderSettlementPreview(d, withConfirm) {
               `<div class="subitem"><span class="hit">命中</span> ${esc(i.question)} +${i.reward}（答案 ${esc(formatContent(i.type, i.content))}）</div>`).join('') || '<span class="muted">未命中</span>'}</td>
           </tr>`).join('')}
       </table>
+      </div>
       ${withConfirm ? `
         <label class="field row ${breaches.length ? '' : 'muted'}" id="ov-row" ${breaches.length ? '' : 'hidden'}>
           <input type="checkbox" id="ov"> <span>知晓超限，仍要发奖</span>
@@ -373,6 +379,7 @@ async function renderRecon() {
     <div class="card">
       <h3>每日对账（应收 vs 实发）</h3>
       ${runs.length === 0 ? '<div class="muted">还没有对账记录。每天 09:00（北京时间）自动跑一次，对前一天的账。</div>' : `
+      <div class="table-wrap">
       <table>
         <tr><th>日期</th><th>状态</th><th>差异明细</th></tr>
         ${runs.map((r) => `
@@ -383,7 +390,8 @@ async function renderRecon() {
               ? JSON.parse(r.diff_json).map((x) => `QQ ${esc(x.qq_id)}：应收 ${x.expect} / 实发 ${x.actual}（差 ${x.diff > 0 ? '+' : ''}${x.diff}）`).join('<br>')
               : r.status === 'error' ? esc(r.expect_json || '') : '—'}</td>
           </tr>`).join('')}
-      </table>`}
+      </table>
+      </div>`}
     </div>`;
 }
 

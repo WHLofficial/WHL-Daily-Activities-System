@@ -88,6 +88,8 @@ export function toast(msg, isErr = false) {
   el.className = 'toast' + (isErr ? ' err' : '');
   el.textContent = msg;
   document.body.appendChild(el);
+  // 折成多行时，999px 的胶囊圆角会把首尾文字顶到弧线外，换成常规圆角
+  if (el.offsetHeight > 48) el.classList.add('multi');
   setTimeout(() => el.classList.add('show'), 10);
   setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, 3000);
 }
