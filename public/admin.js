@@ -119,10 +119,48 @@ async function renderNew() {
       <label class="field row"><input id="f-open" type="checkbox"> <span>创建后立即开放</span></label>
       <div id="m-list"></div>
       <div class="row mt-s"><button class="ghost small" id="m-add" type="button">＋ 加一场比赛（最多 3 场）</button></div>
+      <div class="card">
+        <label class="field row"><input type="checkbox" id="c-on"> <span>加一个「猜胜负」：覆盖全部场次，按命中场数算分</span></label>
+        <div id="c-body" hidden>
+          <label class="field"><span>题目</span><input id="c-q" maxlength="60" placeholder="猜胜负"></label>
+          <label class="field"><span>计分方式</span>
+            <select id="c-mode">
+              <option value="tiered">按命中场数分档（取满足的最高档）</option>
+              <option value="per_hit">每中一场给固定分</option>
+            </select>
+          </label>
+          <div id="c-tiers"></div>
+          <div class="muted" id="c-hint"></div>
+        </div>
+      </div>
       <div class="row mt"><button class="grow" id="create">创建竞猜</button></div>
     </div>`;
 
   const mList = document.getElementById('m-list');
+  const cOn = document.getElementById('c-on');
+  const cBody = document.getElementById('c-body');
+  const cMode = document.getElementById('c-mode');
+  // 档位输入框跟着比赛场数和计分方式变：2 场不可能命中 3 场，就别给 hit3 的框
+  const drawCrossTiers = () => {
+    const n = mList.children.length;
+    const keys = cMode.value === 'per_hit' ? ['perHit'] : ['hit1', 'hit2', 'hit3'].slice(0, n);
+    const def = cMode.value === 'per_hit' ? defT.wdl_all_per_hit : defT.wdl_all;
+    document.getElementById('c-tiers').innerHTML = keys.map((k) =>
+      `<label class="field"><span>${k === 'perHit' ? '每命中一场' : TIER_LABEL[k]} +分</span><input type="number" data-t="${k}" value="${def?.[k] ?? ''}"></label>`).join('');
+  };
+  const syncCross = () => {
+    const n = mList.children.length;
+    const ok = n >= 2;
+    cOn.disabled = !ok;
+    if (!ok) cOn.checked = false;
+    cBody.hidden = !cOn.checked;
+    document.getElementById('c-hint').textContent = ok
+      ? `覆盖全部 ${n} 场，最多命中 ${n} 场`
+      : '至少 2 场比赛才能加「猜胜负」';
+    if (cOn.checked) drawCrossTiers();
+  };
+  cOn.onchange = syncCross;
+  cMode.onchange = drawCrossTiers;
   const addItem = (box) => {
     box.insertAdjacentHTML('beforeend', mkItem());
     const row = box.lastElementChild;
@@ -133,9 +171,10 @@ async function renderNew() {
   const addMatch = () => {
     mList.insertAdjacentHTML('beforeend', mkMatch());
     const card = mList.lastElementChild;
-    card.querySelector('.m-del').onclick = () => card.remove();
+    card.querySelector('.m-del').onclick = () => { card.remove(); syncCross(); };
     card.querySelector('.i-add').onclick = () => addItem(card.querySelector('.i-list'));
     addItem(card.querySelector('.i-list'));
+    syncCross();
   };
   document.getElementById('m-add').onclick = () => {
     if (mList.children.length >= 3) return toast('一场竞猜最多 3 场比赛', true);
@@ -155,6 +194,15 @@ async function renderNew() {
         cap: null,
       })),
     }));
+    const cross = cOn.checked ? {
+      type: 'wdl_all',
+      question: document.getElementById('c-q').value.trim(),
+      tiers: {
+        mode: cMode.value,
+        ...Object.fromEntries([...document.querySelectorAll('#c-tiers input')]
+          .map((i) => [i.dataset.t, Number(i.value)]).filter(([, n]) => Number.isInteger(n) && n > 0)),
+      },
+    } : null;
     try {
       const r = await api('/admin/events', {
         method: 'POST',
@@ -164,6 +212,7 @@ async function renderNew() {
           rewardCap: Number(document.getElementById('f-cap').value),
           openNow: document.getElementById('f-open').checked,
           matches,
+          cross,
         },
       });
       toast(`已创建竞猜 #${r.eventId}`);
@@ -198,7 +247,7 @@ async function renderManage(id) {
         <span class="badge ${STATUS_CLASS[e.status]}">${STATUS_LABEL[e.status]}</span>
         ${e.status === 'paid' && !d.batch ? '<span class="badge orange">无人命中</span>' : ''}
       </div>
-      <div class="muted">截止 ${fmtTime(e.deadline)} · ${d.predictions.length} 人已提交 · 每项上限 ${e.reward_cap} 分</div>
+      <div class="muted">截止 ${fmtTime(e.deadline)} · ${new Set(d.predictions.map((p) => p.userId)).size} 人已提交 · 每项上限 ${e.reward_cap} 分${d.items.some((i) => i.match_id == null) ? ` · 含「猜胜负」（全部 ${d.matches.length} 场）` : ''}</div>
       <div class="row mt-s">
         ${acts.map(([a, label, cls]) => `<button class="${cls} small" data-act="${a}">${label}</button>`).join('')}
       </div>
@@ -342,7 +391,7 @@ async function renderSettlementPreview(d, withConfirm) {
             <td>${bound.get(row.user_id) ? esc(bound.get(row.user_id)) : '<span class="badge red">未绑定</span>'}</td>
             <td class="num"><b>${row.total}</b></td>
             <td>${row.items.filter((i) => i.hit).map((i) =>
-              `<div class="subitem"><span class="hit">命中</span> ${esc(i.question)} +${i.reward}（答案 ${esc(formatContent(i.type, i.content))}）</div>`).join('') || '<span class="muted">未命中</span>'}</td>
+              `<div class="subitem"><span class="hit">命中</span> ${esc(i.question)}${/^hit\d+$/.test(i.tier) ? ` · ${esc(TIER_LABEL[i.tier] || i.tier)}` : ''} +${i.reward}（答案 ${esc(formatContent(i.type, i.content, d.matches))}）</div>`).join('') || '<span class="muted">未命中</span>'}</td>
           </tr>`).join('')}
       </table>
       </div>

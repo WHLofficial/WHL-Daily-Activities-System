@@ -75,6 +75,26 @@ export function computeSettlement(
         if (funHits.get(item.id)?.has(p.user_id)) {
           hit = true; tier = 'fun'; reward = tiers.fun || 0;
         }
+      } else if (item.type === 'wdl_all') {
+        // 跨场次玩法：content 是 {"<matchId>": "home|draw|away"}，逐场比对胜负。
+        // tier 记实际命中的场数（读起来准），tiered 模式的分数取「不高于命中场数」的最高档。
+        let hits = 0;
+        for (const [mid, pick] of Object.entries(content as Record<string, string>)) {
+          const actual = actualByMatch.get(Number(mid));
+          if (actual && pick === wdlOf(actual.home, actual.away)) hits++;
+        }
+        if (hits > 0) {
+          hit = true;
+          tier = `hit${hits}`;
+          if (tiers.mode === 'per_hit') {
+            reward = (tiers.perHit || 0) * hits;
+          } else {
+            for (let n = hits; n >= 1; n--) {
+              if (tiers[`hit${n}`]) { reward = tiers[`hit${n}`]; break; }
+            }
+          }
+          hitTiers.push(tier);
+        }
       }
 
       itemTotal += reward;

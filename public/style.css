@@ -101,6 +101,10 @@ details.card summary { cursor: pointer; font-weight: 600; }
 .seg label { flex: 1; text-align: center; padding: 9px 0; cursor: pointer; font-weight: 600; background: #fff; }
 .seg label.on { background: var(--brand); color: #fff; }
 .seg input { display: none; }
+/* 猜胜负：一场一行，左边队名右边主胜/平/客胜 */
+.wdl-all-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; }
+.wdl-all-row .seg { flex: 0 0 210px; }
+.wdl-all-row .seg label { padding: 7px 0; font-size: 13px; }
 .bigcode {
   font-size: 34px; font-weight: 800; letter-spacing: 6px; text-align: center;
   padding: 14px; background: var(--brand-tint); border-radius: var(--radius-md); margin: 10px 0; color: var(--brand);
@@ -146,6 +150,8 @@ code.kbd { background: #eceef1; border-radius: 6px; padding: 1px 7px; font-size:
   .topbar .nav-links a, .topbar .nav-tab { font-size: 13px; }
   .wrap { padding: 12px 12px 64px; }
   .card { padding: 16px; }
+  .wdl-all-row { flex-wrap: wrap; }
+  .wdl-all-row .seg { flex: 1 0 100%; }
   table { white-space: nowrap; }
 }
 

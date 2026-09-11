@@ -1,7 +1,7 @@
 // 用户端 SPA（无框架，hash 路由）：#/ 竞猜列表 · #/event/:id 详情 · #/bind 绑定 QQ · #/password 改密码
 import {
   api, fmtTime, countdown, STATUS_LABEL, STATUS_CLASS, esc, toast,
-  TYPE_NAME, TIER_LABEL, formatContent, roleLabel, PASSWORD_FORM, wirePassword,
+  TYPE_NAME, TIER_LABEL, WDL_NAME, formatContent, roleLabel, PASSWORD_FORM, wirePassword,
 } from './core.js';
 
 const app = document.getElementById('app');
@@ -62,10 +62,21 @@ async function renderList() {
 // ---------- 详情 ----------
 function tierHint(item) {
   const t = JSON.parse(item.tier_json);
+  if (item.type === 'wdl_all') {
+    // 两种计分模式：每中一场固定分，或按命中场数分档（取满足的最高档）
+    if (t.mode === 'per_hit') return `每命中一场 +${t.perHit}`;
+    return ['hit1', 'hit2', 'hit3'].filter((k) => t[k]).map((k) => `${TIER_LABEL[k]} +${t[k]}`).join(' · ');
+  }
   return ['score', 'goals', 'wdl', 'fun'].filter((k) => t[k]).map((k) => `${TIER_LABEL[k]} +${t[k]}`).join(' · ');
 }
 
-function itemInput(item, saved) {
+const wdlSeg = (name, dataF, extra, cur) => `
+  <div class="seg">${['home', 'draw', 'away'].map((val) => `
+    <label class="${cur === val ? 'on' : ''}">
+      <input type="radio" name="${name}" data-f="${dataF}" ${extra} value="${val}" ${cur === val ? 'checked' : ''}>${WDL_NAME[val]}
+    </label>`).join('')}</div>`;
+
+function itemInput(item, saved, matches) {
   if (item.type === 'score') {
     const s = saved || { home: '', away: '' };
     return `<div class="row">
@@ -75,19 +86,24 @@ function itemInput(item, saved) {
     </div>`;
   }
   if (item.type === 'wdl') {
-    const s = saved || '';
-    return `<div class="seg">${['home:主胜', 'draw:平', 'away:客胜'].map((x) => {
-      const [val, label] = x.split(':');
-      return `<label class="${s === val ? 'on' : ''}"><input type="radio" name="i${item.id}" data-f="wdl" value="${val}" ${s === val ? 'checked' : ''}>${label}</label>`;
-    }).join('')}</div>`;
+    return wdlSeg(`i${item.id}`, 'wdl', '', saved || '');
   }
   if (item.type === 'goals') {
     return `<input class="score-in" type="number" min="0" max="20" data-f="goals" value="${saved ?? ''}" placeholder="球数">`;
   }
+  if (item.type === 'wdl_all') {
+    // 每场比赛一组主胜/平/客胜，提交时按场次汇总成一个对象
+    const s = saved || {};
+    return (matches || []).map((m) => `
+      <div class="wdl-all-row">
+        <span class="grow">${esc(m.home)} vs ${esc(m.away)}</span>
+        ${wdlSeg(`i${item.id}-${m.id}`, 'wdl_all', `data-m="${m.id}"`, s[m.id] || '')}
+      </div>`).join('');
+  }
   return `<input data-f="fun" maxlength="200" value="${esc(saved ?? '')}" placeholder="写下你的答案">`;
 }
 
-function renderMyResult(my, totalAmount) {
+function renderMyResult(my, totalAmount, matches) {
   const mine = my.total ?? 0;
   const all = totalAmount ?? 0;
   // 全场为 0 说明无人命中，与「我没中但场上有分」是两回事，分开说
@@ -101,7 +117,7 @@ function renderMyResult(my, totalAmount) {
     ${my.items?.map((i) => `
       <div class="subitem">
         ${i.hit ? `<span class="hit">命中</span> +${i.reward}` : '<span class="miss">未命中</span>'}
-        ${esc(i.question)}，我的答案：${esc(formatContent(i.type, i.content))}
+        ${esc(i.question)}，我的答案：${esc(formatContent(i.type, i.content, matches))}
         ${i.hitTiers?.length > 1 ? `<span class="muted">（同时命中 ${i.hitTiers.map((t) => TIER_LABEL[t] || t).join('、')}，取最高档）</span>` : ''}
       </div>`).join('')}`;
 }
@@ -123,8 +139,8 @@ function renderOthers(d) {
             const m = d.matches.find((x) => x.id === i.match_id) || {};
             const gained = o.hits ? o.hits[i.id] : undefined;
             return `<div class="other-line">
-              <span class="muted">${esc(m.home || '')} vs ${esc(m.away || '')}</span>
-              <span class="grow">${i.question === TYPE_NAME[i.type] ? '' : `${esc(i.question)}：`}${esc(formatContent(i.type, o.items[i.id]))}</span>
+              <span class="muted">${i.match_id == null ? '全部场次' : `${esc(m.home || '')} vs ${esc(m.away || '')}`}</span>
+              <span class="grow">${i.question === TYPE_NAME[i.type] ? '' : `${esc(i.question)}：`}${esc(formatContent(i.type, o.items[i.id], d.matches))}</span>
               ${o.hits ? (gained !== undefined ? `<span class="hit">+${gained}</span>` : '<span class="miss">未中</span>') : ''}
             </div>`;
           }).join('')}
@@ -148,7 +164,7 @@ async function renderDetail(id) {
         ${e.status === 'open' ? `截止 ${fmtTime(e.deadline)}（${countdown(e.deadline)}）` : `截止 ${fmtTime(e.deadline)}`}
         · ${d.participants} 人参与 · 共 ${d.items.length} 题
       </div>
-      ${e.myResult ? renderMyResult(e.myResult, e.totalAmount) : ''}
+      ${e.myResult ? renderMyResult(e.myResult, e.totalAmount, d.matches) : ''}
     </div>
     ${canSubmit && me && !me.binding ? `
       <div class="banner warn">提交预测前要先完成 <a href="#/bind">QQ 绑定</a>，绑定后积分才能自动发到你的 QQ 上。</div>` : ''}
@@ -162,8 +178,20 @@ async function renderDetail(id) {
           <div class="item" data-item="${i.id}">
             <div class="q">${esc(i.question)}${i.question === TYPE_NAME[i.type] ? '' : ` <span class="muted">${TYPE_NAME[i.type]}</span>`}</div>
             <div class="tier-hint">${tierHint(i)}</div>
-            ${itemInput(i, d.myPredictions[i.id])}
+            ${itemInput(i, d.myPredictions[i.id], d.matches)}
           </div>`).join('')}
+      </div>`).join('')}
+    ${d.items.filter((i) => i.match_id == null).map((i) => `
+      <div class="card">
+        <div class="match-head">
+          <h3>${esc(i.question)}</h3>
+          <span class="muted">全部 ${d.matches.length} 场</span>
+        </div>
+        <div class="item" data-item="${i.id}">
+          <div class="q">每场都要选，按命中场数算分</div>
+          <div class="tier-hint">${tierHint(i)}</div>
+          ${itemInput(i, d.myPredictions[i.id], d.matches)}
+        </div>
       </div>`).join('')}
     ${canSubmit ? `
       <div class="row mt"><button class="grow" id="submit">提交预测</button></div>` : ''}
@@ -186,7 +214,14 @@ async function renderDetail(id) {
       if (item.type === 'score') content = { home: num(f('home')), away: num(f('away')) };
       else if (item.type === 'wdl') content = block.querySelector('[data-f="wdl"]:checked')?.value;
       else if (item.type === 'goals') content = num(f('goals'));
-      else content = f('fun')?.value.trim();
+      else if (item.type === 'wdl_all') {
+        content = {};
+        block.querySelectorAll('[data-f="wdl_all"]:checked').forEach((r) => { content[r.dataset.m] = r.value; });
+        if (Object.keys(content).length !== d.matches.length) {
+          toast(`「${item.question}」还有比赛没选`, true);
+          return;
+        }
+      } else content = f('fun')?.value.trim();
       if (content === undefined || content === null || content === '' ||
           (item.type === 'score' && (!Number.isInteger(content.home) || !Number.isInteger(content.away)))) {
         toast(`「${item.question}」还没填完`, true);

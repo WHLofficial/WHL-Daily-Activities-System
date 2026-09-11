@@ -43,11 +43,17 @@ export const STATUS_CLASS = {
 };
 
 // 题型与档位：全站唯一来源，防止各视图各叫一套
-export const TYPE_NAME = { score: '猜比分', wdl: '胜平负', goals: '总进球', fun: '趣味题' };
-export const TIER_LABEL = { score: '比分全中', goals: '总进球', wdl: '胜平负', fun: '趣味命中' };
+export const TYPE_NAME = { score: '猜比分', wdl: '胜平负', goals: '总进球', fun: '趣味题', wdl_all: '猜胜负' };
+export const TIER_LABEL = {
+  score: '比分全中', goals: '总进球', wdl: '胜平负', fun: '趣味命中',
+  hit1: '胜负中 1 场', hit2: '胜负中 2 场', hit3: '胜负中 3 场',
+};
 // 建期可选题型。不含 goals：独立的「总进球」题型已下线，判分与渲染仍认它，
 // 好让历史竞猜照常显示；想猜总进球，用「猜比分」里的三档。
+// 也不含 wdl_all：它覆盖全部场次，走建期页顶层的「猜胜负」开关，不在单场玩法项里选。
 export const CREATE_TYPES = ['score', 'wdl', 'fun'];
+// 胜平负三个选项的写法，前端各处共用
+export const WDL_NAME = { home: '主胜', draw: '平', away: '客胜' };
 
 // 角色名与身份徽章：管理员（赛事系统管理员）/ 发起人 / 普通用户
 export const ROLE_NAME = { admin: '管理员', superadmin: '管理员', coach: '普通用户', user: '普通用户' };
@@ -70,10 +76,18 @@ export function statusPill(map, s) {
   return `<span class="badge ${cls}">${label}</span>`;
 }
 
-export function formatContent(type, c) {
+// matches 只有「猜胜负」用得上：它的答案是按场次存的，要把场次 id 翻成队名
+export function formatContent(type, c, matches) {
   if (type === 'score') return `${c.home}:${c.away}`;
-  if (type === 'wdl') return { home: '主胜', draw: '平', away: '客胜' }[c] || c;
+  if (type === 'wdl') return WDL_NAME[c] || c;
   if (type === 'goals') return `${c} 球`;
+  if (type === 'wdl_all') {
+    return Object.entries(c || {}).map(([mid, pick]) => {
+      const m = (matches || []).find((x) => x.id === Number(mid));
+      const vs = m ? `${m.home} vs ${m.away}` : `场次 ${mid}`;
+      return `${vs} ${WDL_NAME[pick] || pick}`;
+    }).join(' · ');
+  }
   return String(c);
 }
 

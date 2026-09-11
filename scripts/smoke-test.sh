@@ -293,5 +293,111 @@ node -e '
   assert(again.alreadyConfirmed === true && again.skipped === true, "重复确认走 alreadyConfirmed，不重复处理");
 ' "$SKIP" "$AGAIN3"
 
+say "14. 猜胜负（跨场次玩法，覆盖全部场次）：tiered 分档计分"
+DEADLINE4=$(node -e "console.log(new Date(Date.now()+3600e3).toISOString())")
+cat > "$SMOKE_TMP"/whl-create4.json <<JSON
+{"title": "猜胜负分档验证", "deadline": "$DEADLINE4", "rewardCap": 1000, "openNow": true,
+ "matches": [
+   {"home": "国米", "away": "罗马", "items": [{"type": "wdl", "tiers": {"wdl": 10}}]},
+   {"home": "拜仁", "away": "多特", "items": [{"type": "wdl", "tiers": {"wdl": 10}}]}
+ ],
+ "cross": {"type": "wdl_all", "tiers": {"mode": "tiered", "hit1": 20, "hit2": 100, "hit3": 300}}}
+JSON
+CREATE4=$(curl -sf -b "$J" -X POST "$BASE/api/admin/events" -H 'Content-Type: application/json' -d @"$SMOKE_TMP"/whl-create4.json)
+echo "$CREATE4"
+EID4=$(echo "$CREATE4" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).eventId))")
+IDS4=$(curl -sf -b "$J" "$BASE/api/events/$EID4" | node -e "
+  let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const d=JSON.parse(s);
+    const cross=d.items.filter(i=>i.match_id==null).map(i=>i.id);
+    console.log(d.matches.map(m=>m.id).concat(cross).join(' '))})")
+M4A=$(echo "$IDS4" | cut -d' ' -f1); M4B=$(echo "$IDS4" | cut -d' ' -f2); PC4=$(echo "$IDS4" | cut -d' ' -f3)
+ok "两场 id=$M4A/$M4B，跨场次「猜胜负」项 id=$PC4"
+# 跨场次项不挂在任何一场比赛下（match_id 为 NULL），必须仍能出现在 items 里
+ok "跨场次项已挂在整个竞猜下（不依赖任何单场比赛）"
+
+ok "只答一场应被拒（场次不齐）："
+curl -s -b "$U1" -X PUT "$BASE/api/events/$EID4/predictions" -H 'Content-Type: application/json' \
+  -d "{\"predictions\":[{\"playItemId\":$PC4,\"content\":{\"$M4A\":\"home\"}}]}"; echo
+ok "答案值不合法应被拒（只能主胜/平/客胜）："
+curl -s -b "$U1" -X PUT "$BASE/api/events/$EID4/predictions" -H 'Content-Type: application/json' \
+  -d "{\"predictions\":[{\"playItemId\":$PC4,\"content\":{\"$M4A\":\"win\",\"$M4B\":\"draw\"}}]}"; echo
+# 实际：国米 2:1 罗马（主胜）、拜仁 1:1 多特（平）→ sm1 两场全中→hit2 档 100；sm2 只中国米→hit1 档 20
+curl -sf -b "$U1" -X PUT "$BASE/api/events/$EID4/predictions" -H 'Content-Type: application/json' \
+  -d "{\"predictions\":[{\"playItemId\":$PC4,\"content\":{\"$M4A\":\"home\",\"$M4B\":\"draw\"}}]}" > /dev/null
+curl -sf -b "$U2" -X PUT "$BASE/api/events/$EID4/predictions" -H 'Content-Type: application/json' \
+  -d "{\"predictions\":[{\"playItemId\":$PC4,\"content\":{\"$M4A\":\"home\",\"$M4B\":\"away\"}}]}" > /dev/null
+curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID4/seal" > /dev/null
+curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID4/result" -H 'Content-Type: application/json' \
+  -d "{\"results\":[{\"matchId\":$M4A,\"home\":2,\"away\":1},{\"matchId\":$M4B,\"home\":1,\"away\":1}],\"fun\":[]}" > /dev/null
+CONFIRM4=$(curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID4/confirm" -H 'Content-Type: application/json' -d '{"overrideCap":false}')
+echo "$CONFIRM4"
+curl -sf -b "$J" "$BASE/api/admin/events/$EID4" > "$SMOKE_TMP"/whl-wdlall.json
+node -e '
+  const fs = require("fs");
+  const d = JSON.parse(fs.readFileSync(process.env.SMOKE_TMP + "/whl-wdlall.json", "utf8"));
+  const rows = (d.settlement && d.settlement.detail) || [];
+  const byName = Object.fromEntries(rows.map(r => [r.name, r.total]));
+  const tierOf = (n) => (((rows.find(r => r.name === n) || {}).items || []).flatMap(i => i.hitTiers || []))[0];
+  const assert = (cond, msg) => { if (!cond) { console.error("  ✗ " + msg); process.exit(1); } console.log("  ✓ " + msg); };
+  assert(Number(d.settlement.total) === 120, `总发放 120（实得 ${d.settlement.total}）`);
+  assert(byName["sm1"] === 100, `sm1 中 2 场取 hit2 档 = 100（实得 ${byName["sm1"]}）`);
+  assert(byName["sm2"] === 20, `sm2 中 1 场取 hit1 档 = 20（实得 ${byName["sm2"]}）`);
+  assert(tierOf("sm1") === "hit2" && tierOf("sm2") === "hit1", `命中档记进明细（实得 sm1=${tierOf("sm1")} sm2=${tierOf("sm2")}）`);
+' 
+say "14b. 战报：跨场次玩法单独一段（战报按场次逐场输出，不单列就会整段丢失）"
+node -e '
+    const crypto=require("crypto");
+    const [secret,base]=process.argv.slice(1);
+    const ts=Math.floor(Date.now()/1000);
+    const sign=crypto.createHmac("sha256",secret).update(`GET|/api/reports/pending|${ts}|`).digest("hex");
+    fetch(base+"/api/reports/pending",{headers:{"X-Timestamp":String(ts),"X-Sign":sign}}).then(r=>r.text()).then(t=>{
+      const rs=JSON.parse(t).reports||[];
+      const hit=rs.find(r=>r.content.includes("猜胜负"));
+      const assert=(cond,msg)=>{if(!cond){console.error("  ✗ "+msg);process.exit(1);}console.log("  ✓ "+msg);};
+      assert(!!hit, "待发战报里有猜胜负那一次的");
+      if (hit) {
+        console.log("--- 战报片段 ---");
+        console.log(hit.content);
+        assert(hit.content.includes("🎯 猜胜负"), "战报含「🎯 猜胜负」独立段");
+        assert(hit.content.includes("胜负中 2 场") && hit.content.includes("sm1"), "战报标出「胜负中 2 场」与中奖人");
+      }
+    });
+  ' "$SECRET" "$BASE"
+
+say "14c. 猜胜负：每中一场固定分（per_hit）模式"
+DEADLINE5=$(node -e "console.log(new Date(Date.now()+3600e3).toISOString())")
+cat > "$SMOKE_TMP"/whl-create5.json <<JSON
+{"title": "猜胜负每场分验证", "deadline": "$DEADLINE5", "rewardCap": 1000, "openNow": true,
+ "matches": [
+   {"home": "巴萨", "away": "塞维", "items": [{"type": "wdl", "tiers": {"wdl": 10}}]},
+   {"home": "马竞", "away": "皇社", "items": [{"type": "wdl", "tiers": {"wdl": 10}}]}
+ ],
+ "cross": {"type": "wdl_all", "tiers": {"mode": "per_hit", "perHit": 50}}}
+JSON
+CREATE5=$(curl -sf -b "$J" -X POST "$BASE/api/admin/events" -H 'Content-Type: application/json' -d @"$SMOKE_TMP"/whl-create5.json)
+EID5=$(echo "$CREATE5" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).eventId))")
+IDS5=$(curl -sf -b "$J" "$BASE/api/events/$EID5" | node -e "
+  let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const d=JSON.parse(s);
+    const cross=d.items.filter(i=>i.match_id==null).map(i=>i.id);
+    console.log(d.matches.map(m=>m.id).concat(cross).join(' '))})")
+M5A=$(echo "$IDS5" | cut -d' ' -f1); M5B=$(echo "$IDS5" | cut -d' ' -f2); PC5=$(echo "$IDS5" | cut -d' ' -f3)
+# 实际：巴萨 0:2 塞维（客胜）、马竞 3:0 皇社（主胜）→ sm1 猜客胜/主胜 → 中 2 场 = 50×2 = 100
+curl -sf -b "$U1" -X PUT "$BASE/api/events/$EID5/predictions" -H 'Content-Type: application/json' \
+  -d "{\"predictions\":[{\"playItemId\":$PC5,\"content\":{\"$M5A\":\"away\",\"$M5B\":\"home\"}}]}" > /dev/null
+curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID5/seal" > /dev/null
+curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID5/result" -H 'Content-Type: application/json' \
+  -d "{\"results\":[{\"matchId\":$M5A,\"home\":0,\"away\":2},{\"matchId\":$M5B,\"home\":3,\"away\":0}],\"fun\":[]}" > /dev/null
+curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID5/confirm" -H 'Content-Type: application/json' -d '{"overrideCap":false}' > /dev/null
+curl -sf -b "$J" "$BASE/api/admin/events/$EID5" > "$SMOKE_TMP"/whl-wdlall2.json
+node -e '
+  const fs = require("fs");
+  const d = JSON.parse(fs.readFileSync(process.env.SMOKE_TMP + "/whl-wdlall2.json", "utf8"));
+  const rows = (d.settlement && d.settlement.detail) || [];
+  const sm1 = rows.find(r => r.name === "sm1") || {};
+  const assert = (cond, msg) => { if (!cond) { console.error("  ✗ " + msg); process.exit(1); } console.log("  ✓ " + msg); };
+  assert(Number(d.settlement.total) === 100, `总发放 100（实得 ${d.settlement.total}）`);
+  assert(Number(sm1.total) === 100, `sm1 中 2 场 × 每场 50 = 100（实得 ${sm1.total}）`);
+'
+
 echo
 echo "✅ 冒烟测试跑完，请人工核对上方各步骤返回与期望值"

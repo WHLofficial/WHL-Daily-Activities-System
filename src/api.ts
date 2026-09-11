@@ -42,11 +42,43 @@ function validateContent(type: string, content: any): string {
     if (typeof content !== 'string' || !content.trim() || content.length > 200) throw new HttpError(400, '趣味题答案不合法');
     return JSON.stringify(content.trim());
   }
+  if (type === 'wdl_all') {
+    // 一个玩法项覆盖全部场次：{"<matchId>": "home|draw|away"}。是否「场次齐全」要拿竞猜的
+    // 场次列表比对，放在提交路由里查；这里只保证形状与取值合法。
+    if (!content || typeof content !== 'object' || Array.isArray(content)) {
+      throw new HttpError(400, '猜胜负答案不合法');
+    }
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(content)) {
+      if (!/^\d+$/.test(k)) throw new HttpError(400, '猜胜负答案不合法');
+      if (!['home', 'draw', 'away'].includes(v as string)) throw new HttpError(400, '每场比赛只能填主胜、平或客胜');
+      out[k] = v as string;
+    }
+    if (Object.keys(out).length === 0) throw new HttpError(400, '猜胜负需要回答全部场次');
+    return JSON.stringify(out);
+  }
   throw new HttpError(400, `未知玩法类型 ${type}`);
 }
 
 function validateTiers(type: string, tiers: any): string {
   if (!tiers || typeof tiers !== 'object') throw new HttpError(400, '档位配置不合法');
+  if (type === 'wdl_all') {
+    // 两种计分模式：tiered 按命中的场数给一档分数，per_hit 每命中一场给固定分。
+    if (tiers.mode === 'per_hit') {
+      const v = tiers.perHit;
+      if (!Number.isInteger(v) || v <= 0 || v > 100000) throw new HttpError(400, '每命中一场的积分必须是 1~100000 的整数');
+      return JSON.stringify({ mode: 'per_hit', perHit: v });
+    }
+    const out: Record<string, number | string> = { mode: 'tiered' };
+    for (const k of ['hit1', 'hit2', 'hit3']) {
+      const v = tiers[k];
+      if (v === undefined) continue;
+      if (!Number.isInteger(v) || v <= 0 || v > 100000) throw new HttpError(400, `档位 ${k} 必须是 1~100000 的整数`);
+      out[k] = v;
+    }
+    if (out.hit1 === undefined) throw new HttpError(400, '猜胜负至少要配置「命中 1 场」的积分');
+    return JSON.stringify(out);
+  }
   const out: Record<string, number> = {};
   const keys = type === 'score' ? ['score', 'goals', 'wdl'] : [type];
   for (const k of keys) {
@@ -256,13 +288,13 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       const events = (await env.DB.prepare(
         `SELECT e.*, (SELECT COUNT(DISTINCT p.user_id) FROM prediction p
                         JOIN play_item i ON i.id = p.play_item_id
-                        JOIN match m ON m.id = i.match_id WHERE m.event_id = e.id) AS participants
+                       WHERE i.event_id = e.id) AS participants
            FROM event e WHERE e.status != 'draft' ORDER BY e.created_at DESC LIMIT 20`,
       ).all()).results as any[];
       const mine = await env.DB.prepare(
-        `SELECT m.event_id, COUNT(*) AS n FROM prediction p
-           JOIN play_item i ON i.id = p.play_item_id JOIN match m ON m.id = i.match_id
-          WHERE p.user_id = ? GROUP BY m.event_id`,
+        `SELECT i.event_id, COUNT(*) AS n FROM prediction p
+           JOIN play_item i ON i.id = p.play_item_id
+          WHERE p.user_id = ? GROUP BY i.event_id`,
       ).bind(user.id).all();
       const mineMap = new Map(mine.results.map((r: any) => [r.event_id, r.n]));
       return json({
@@ -278,17 +310,17 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       if (!event) throw new HttpError(404, '竞猜不存在');
       const matches = (await env.DB.prepare('SELECT * FROM match WHERE event_id = ? ORDER BY id').bind(event.id).all()).results as any[];
       const items = (await env.DB.prepare(
-        `SELECT i.* FROM play_item i JOIN match m ON m.id = i.match_id WHERE m.event_id = ? ORDER BY m.id, i.sort, i.id`,
+        `SELECT * FROM play_item WHERE event_id = ? ORDER BY match_id IS NULL, match_id, sort, id`,
       ).bind(event.id).all()).results as any[];
       const myPreds = (await env.DB.prepare(
         `SELECT p.play_item_id, p.content_json FROM prediction p
-           JOIN play_item i ON i.id = p.play_item_id JOIN match m ON m.id = i.match_id
-          WHERE m.event_id = ? AND p.user_id = ?`,
+           JOIN play_item i ON i.id = p.play_item_id
+          WHERE i.event_id = ? AND p.user_id = ?`,
       ).bind(event.id, user.id).all()).results as any[];
       const participants = (await env.DB.prepare(
         `SELECT COUNT(DISTINCT p.user_id) AS n FROM prediction p
-           JOIN play_item i ON i.id = p.play_item_id JOIN match m ON m.id = i.match_id
-          WHERE m.event_id = ?`,
+           JOIN play_item i ON i.id = p.play_item_id
+          WHERE i.event_id = ?`,
       ).bind(event.id).first() as any).n;
       let detail: any[] | null = null;
       if (event.status === 'settled' || event.status === 'paid') {
@@ -303,8 +335,8 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       const allPreds = (await env.DB.prepare(
         `SELECT p.play_item_id, p.user_id, p.content_json, u.display_name, u.username
            FROM prediction p JOIN users u ON u.id = p.user_id
-           JOIN play_item i ON i.id = p.play_item_id JOIN match m ON m.id = i.match_id
-          WHERE m.event_id = ? ORDER BY p.user_id, p.play_item_id`,
+           JOIN play_item i ON i.id = p.play_item_id
+          WHERE i.event_id = ? ORDER BY p.user_id, p.play_item_id`,
       ).bind(event.id).all()).results as any[];
       const byUser = new Map<number, { name: string; items: Record<number, any> }>();
       for (const p of allPreds) {
@@ -339,12 +371,24 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       const preds: any[] = body.predictions || [];
       if (!Array.isArray(preds) || preds.length === 0) throw new HttpError(400, '没有可提交的预测');
       const stmts = [];
+      // 猜胜负要覆盖全部场次，所以「场次齐全」在这里校验（那时还拿得到 event 的场次列表）
+      let matchIds: number[] | null = null;
       for (const p of preds) {
         const item = await env.DB.prepare(
-          `SELECT i.* FROM play_item i JOIN match m ON m.id = i.match_id WHERE i.id = ? AND m.event_id = ?`,
+          `SELECT * FROM play_item WHERE id = ? AND event_id = ?`,
         ).bind(Number(p.playItemId), event.id).first() as any;
         if (!item) throw new HttpError(400, `玩法项 ${p.playItemId} 不属于本次竞猜`);
         const contentJson = validateContent(item.type, p.content);
+        if (item.type === 'wdl_all') {
+          if (!matchIds) {
+            matchIds = ((await env.DB.prepare('SELECT id FROM match WHERE event_id = ?')
+              .bind(event.id).all()).results as any[]).map((m) => m.id);
+          }
+          const answered = Object.keys(JSON.parse(contentJson)).map(Number);
+          if (answered.length !== matchIds.length || !matchIds.every((id) => answered.includes(id))) {
+            throw new HttpError(400, `猜胜负需要回答全部 ${matchIds.length} 场比赛`);
+          }
+        }
         stmts.push(env.DB.prepare(
           `INSERT INTO prediction (play_item_id, user_id, content_json) VALUES (?, ?, ?)
              ON CONFLICT (play_item_id, user_id)
@@ -366,11 +410,16 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
         // settings 里存的是扁平默认值 {"score":300,"goals":100,"wdl":50,"fun":50}，
         // 建期页按题型取档位（drawTiers 用 def[键]），所以在这一层展开成按题型分档的形状。
         const flat = JSON.parse(s.default_tiers || '{}') as Record<string, number>;
+        const wdl = flat.wdl ?? 50;
         const tiers = {
-          score: { score: flat.score ?? 300, goals: flat.goals ?? 100, wdl: flat.wdl ?? 50 },
-          wdl: { wdl: flat.wdl ?? 50 },
+          score: { score: flat.score ?? 300, goals: flat.goals ?? 100, wdl },
+          wdl: { wdl },
           goals: { goals: flat.goals ?? 100 },
           fun: { fun: flat.fun ?? 50 },
+          // 猜胜负两种计分模式的档位形状不同，分开给默认值：分档用「猜胜负」单场分往上翻倍，
+          // 每中场固定分就取单场分本身。
+          wdl_all: { mode: 'tiered', hit1: wdl, hit2: wdl * 3, hit3: wdl * 6 },
+          wdl_all_per_hit: { mode: 'per_hit', perHit: wdl },
         };
         return json({ tiers, rewardCap: Number(s.reward_cap_default || 1000) });
       }
@@ -409,7 +458,7 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
         const events = (await env.DB.prepare(
           `SELECT e.*, (SELECT COUNT(DISTINCT p.user_id) FROM prediction p
                           JOIN play_item i ON i.id = p.play_item_id
-                          JOIN match m ON m.id = i.match_id WHERE m.event_id = e.id) AS participants
+                         WHERE i.event_id = e.id) AS participants
              FROM event e ORDER BY e.created_at DESC LIMIT 50`,
         ).all()).results;
         return json({ events });
@@ -428,7 +477,7 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
 
         // 先整体校验再落库：任何一项不合法都直接拒绝，不留半成品竞猜
         const matchRows: { home: string; away: string; kickoff: any }[] = [];
-        const itemRows: { mi: number; type: string; question: string; tierJson: string; cap: number | null; sort: number }[] = [];
+        const itemRows: { mi: number | null; type: string; question: string; tierJson: string; cap: number | null; sort: number }[] = [];
         matches.forEach((m: any, mi: number) => {
           matchRows.push({
             home: String(m.home || '').trim() || '主队',
@@ -441,11 +490,25 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
             const it = items[i];
             const type = String(it.type);
             if (type === 'goals') throw new HttpError(400, '「总进球」已并入「猜比分」的三档，不再作为独立玩法项');
+            if (type === 'wdl_all') throw new HttpError(400, '「猜胜负」覆盖全部场次，请用跨场次选项添加');
             if (!['score', 'wdl', 'fun'].includes(type)) throw new HttpError(400, `未知玩法类型 ${type}`);
             const question = String(it.question || '').trim() || { score: '猜比分', wdl: '胜平负', goals: '总进球', fun: '趣味题' }[type];
             itemRows.push({ mi, type, question, tierJson: validateTiers(type, it.tiers), cap: it.cap ? Number(it.cap) : null, sort: i });
           }
         });
+
+        // 跨场次玩法：一次竞猜最多一个，押的是全部场次的胜负
+        if (body.cross) {
+          const c = body.cross;
+          if (String(c.type) !== 'wdl_all') throw new HttpError(400, `未知玩法类型 ${c.type}`);
+          if (matches.length < 2) throw new HttpError(400, '「猜胜负」至少需要 2 场比赛');
+          itemRows.push({
+            mi: null, type: 'wdl_all',
+            question: String(c.question || '').trim() || '猜胜负',
+            tierJson: validateTiers('wdl_all', c.tiers),
+            cap: c.cap ? Number(c.cap) : null, sort: 0,
+          });
+        }
 
         const er = await env.DB.prepare(
           `INSERT INTO event (title, status, created_by, deadline, reward_cap) VALUES (?, ?, ?, ?, ?)`,
@@ -458,12 +521,12 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
               .bind(eid, m.home, m.away, m.kickoff)));
           const mids = mrs.map((r: any) => r.meta.last_row_id);
           await env.DB.batch(itemRows.map((ir) =>
-            env.DB.prepare('INSERT INTO play_item (match_id, type, question, tier_json, reward_cap, sort) VALUES (?, ?, ?, ?, ?, ?)')
-              .bind(mids[ir.mi], ir.type, ir.question, ir.tierJson, ir.cap, ir.sort)));
+            env.DB.prepare('INSERT INTO play_item (event_id, match_id, type, question, tier_json, reward_cap, sort) VALUES (?, ?, ?, ?, ?, ?, ?)')
+              .bind(eid, ir.mi === null ? null : mids[ir.mi], ir.type, ir.question, ir.tierJson, ir.cap, ir.sort)));
         } catch (e) {
           // 落库中途失败（基础设施错误而非校验问题）：清掉已写入部分，不留孤儿期
           await env.DB.batch([
-            env.DB.prepare('DELETE FROM play_item WHERE match_id IN (SELECT id FROM match WHERE event_id = ?)').bind(eid),
+            env.DB.prepare('DELETE FROM play_item WHERE event_id = ?').bind(eid),
             env.DB.prepare('DELETE FROM match WHERE event_id = ?').bind(eid),
             env.DB.prepare('DELETE FROM event WHERE id = ?').bind(eid),
           ]);
@@ -482,19 +545,19 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       if (isEventRoute && method === 'GET' && seg.length === 3) {
         const matches = (await env.DB.prepare('SELECT * FROM match WHERE event_id = ? ORDER BY id').bind(eventId).all()).results;
         const items = (await env.DB.prepare(
-          `SELECT i.* FROM play_item i JOIN match m ON m.id = i.match_id WHERE m.event_id = ? ORDER BY m.id, i.sort, i.id`,
+          `SELECT * FROM play_item WHERE event_id = ? ORDER BY match_id IS NULL, match_id, sort, id`,
         ).bind(eventId).all()).results as any[];
         const preds = (await env.DB.prepare(
           `SELECT p.*, u.display_name FROM prediction p
-             JOIN play_item i ON i.id = p.play_item_id JOIN match m ON m.id = i.match_id
+             JOIN play_item i ON i.id = p.play_item_id
              JOIN users u ON u.id = p.user_id
-            WHERE m.event_id = ? ORDER BY u.id`,
+            WHERE i.event_id = ? ORDER BY u.id`,
         ).bind(eventId).all()).results as any[];
         const bindings = (await env.DB.prepare(
           `SELECT DISTINCT p.user_id, b.qq_id FROM prediction p
-             JOIN play_item i ON i.id = p.play_item_id JOIN match m ON m.id = i.match_id
+             JOIN play_item i ON i.id = p.play_item_id
              LEFT JOIN user_binding b ON b.user_id = p.user_id
-            WHERE m.event_id = ?`,
+            WHERE i.event_id = ?`,
         ).bind(eventId).all()).results as any[];
         const qqMap = new Map(bindings.map((b) => [b.user_id, b.qq_id]));
         const st = await env.DB.prepare('SELECT * FROM settlement WHERE event_id = ?').bind(eventId).first() as any;
@@ -538,7 +601,7 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
         const input: ResultInput = { results: body.results || [], fun: body.fun || [] };
         const matches = (await env.DB.prepare('SELECT * FROM match WHERE event_id = ?').bind(eventId).all()).results as any[];
         const items = (await env.DB.prepare(
-          `SELECT i.* FROM play_item i JOIN match m ON m.id = i.match_id WHERE m.event_id = ?`,
+          `SELECT * FROM play_item WHERE event_id = ? ORDER BY match_id IS NULL, match_id, sort, id`,
         ).bind(eventId).all()).results as any[];
         for (const r of input.results) {
           if (!matches.some((m) => m.id === r.matchId)) throw new HttpError(400, '场次不属于本次竞猜');
@@ -551,13 +614,13 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
         }
         const preds = (await env.DB.prepare(
           `SELECT p.play_item_id, p.user_id, p.content_json FROM prediction p
-             JOIN play_item i ON i.id = p.play_item_id JOIN match m ON m.id = i.match_id WHERE m.event_id = ?`,
+             JOIN play_item i ON i.id = p.play_item_id WHERE i.event_id = ?`,
         ).bind(eventId).all()).results as any[];
         const users = (await env.DB.prepare(
           `SELECT DISTINCT u.id, u.display_name FROM users u
              JOIN prediction p ON p.user_id = u.id
-             JOIN play_item i ON i.id = p.play_item_id JOIN match m ON m.id = i.match_id
-            WHERE m.event_id = ?`,
+             JOIN play_item i ON i.id = p.play_item_id
+            WHERE i.event_id = ?`,
         ).bind(eventId).all()).results as any[];
         const names = Object.fromEntries(users.map((u) => [u.id, u.display_name || u.username]));
 
@@ -629,7 +692,7 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
 
         const matches = (await env.DB.prepare('SELECT * FROM match WHERE event_id = ? ORDER BY id').bind(eventId).all()).results as any[];
         const items = (await env.DB.prepare(
-          `SELECT i.* FROM play_item i JOIN match m ON m.id = i.match_id WHERE m.event_id = ? ORDER BY m.id, i.sort`,
+          `SELECT * FROM play_item WHERE event_id = ? ORDER BY match_id IS NULL, match_id, sort, id`,
         ).bind(eventId).all()).results as any[];
         const actualScores: Record<number, any> = {};
         for (const r of results.results || []) actualScores[r.matchId] = { home: r.home, away: r.away };

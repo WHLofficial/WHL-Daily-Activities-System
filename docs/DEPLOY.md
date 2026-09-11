@@ -39,9 +39,9 @@ npx wrangler d1 create whl-guess --location apac
 npx wrangler d1 migrations apply whl-guess --remote
 ```
 
-✅ 验证：输出显示 4 个迁移（`0001_init.sql` / `0002_tour_auth.sql` / `0003_exhausted.sql` / `0004_payout_claim.sql`）均应用成功。
+✅ 验证：输出显示 5 个迁移（`0001_init.sql` / `0002_tour_auth.sql` / `0003_exhausted.sql` / `0004_payout_claim.sql` / `0005_wdl_all.sql`）均应用成功。
 
-> 已上线的库加列时，别忘了先 `npx wrangler d1 migrations apply whl-guess --remote` 再 `wrangler deploy`：新代码会用到新列（如 `payout_item.claim_at`）。
+> 已上线的库加列或改表时，别忘了先 `npx wrangler d1 migrations apply whl-guess --remote` 再 `wrangler deploy`：新代码会用到新列（如 `payout_item.claim_at`）或新表结构（如 `play_item.event_id`，0005 会重建 `play_item` 与 `prediction`）。
 
 ---
 
@@ -132,7 +132,7 @@ npx wrangler secret delete SETUP_TOKEN
 `guess.whleague.win/admin.html` 登录管理员，依次确认：
 
 - **发起人名单**：把可以开期的管理员/群友勾成发起人（名单外的人看不到管理功能）；
-- **默认档位**（猜比分项：比分全中 300 / 总进球 100 / 胜平负 50；独立玩法项：胜平负 50 / 趣味 50）与单场上限，可按需调整。
+- **默认档位**（猜比分项：比分全中 300 / 总进球 100 / 胜平负 50；单场玩法项：胜平负 50 / 趣味 50；跨场次「猜胜负」：按命中场数分档 50 / 150 / 300，或每场固定 50）与奖励上限，可按需调整。
 
 > 说明：管理员身份来自赛事系统的 `admin/superadmin`，用该账号登录竞猜管理台即可。
 
