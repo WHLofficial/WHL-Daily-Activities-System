@@ -399,5 +399,104 @@ node -e '
   assert(Number(sm1.total) === 100, `sm1 中 2 场 × 每场 50 = 100（实得 ${sm1.total}）`);
 '
 
+say "15. 纯猜胜负：2~10 场、档位留空或填 0 则往前找档（没有单场玩法项）"
+DEADLINE6=$(node -e "console.log(new Date(Date.now()+3600e3).toISOString())")
+# 探针体统一用 ASCII 队名/标题：node -e 的命令行参数在 Windows 下会被按 cp936 解码，中文会乱码
+node -e '
+  const fs = require("fs"), d = process.argv[1], dl = process.argv[2];
+  const T = (t) => ({ type: "wdl_all", tiers: t });
+  const mk = (n, form, cross, withItems) => ({
+    form, title: "edge probe", deadline: dl, rewardCap: 1000, openNow: true,
+    matches: Array.from({ length: n }, (_, i) => ({ home: "H" + i, away: "A" + i, items: withItems ? [{ type: "wdl", tiers: { wdl: 10 } }] : [] })),
+    ...(cross === null ? {} : { cross })
+  });
+  fs.writeFileSync(d + "/whl-pure-1.json", JSON.stringify(mk(1, "pure", T({ mode: "tiered", hit1: 50 }))));
+  fs.writeFileSync(d + "/whl-pure-11.json", JSON.stringify(mk(11, "pure", T({ mode: "tiered", hit1: 50 }))));
+  fs.writeFileSync(d + "/whl-pure-items.json", JSON.stringify(mk(2, "pure", T({ mode: "tiered", hit1: 50 }), true)));
+  fs.writeFileSync(d + "/whl-pure-nocross.json", JSON.stringify(mk(2, "pure", null)));
+  fs.writeFileSync(d + "/whl-pure-zero.json", JSON.stringify(mk(2, "pure", T({ mode: "tiered", hit1: 0, hit2: 0 }))));
+  fs.writeFileSync(d + "/whl-items-4.json", JSON.stringify(mk(4, "items", null, true)));
+' "$SMOKE_TMP" "$DEADLINE6"
+ok "纯猜胜负只给 1 场应被拒："
+curl -s -b "$J" -X POST "$BASE/api/admin/events" -H 'Content-Type: application/json' -d @"$SMOKE_TMP"/whl-pure-1.json; echo
+ok "纯猜胜负给 11 场应被拒（上限 10 场）："
+curl -s -b "$J" -X POST "$BASE/api/admin/events" -H 'Content-Type: application/json' -d @"$SMOKE_TMP"/whl-pure-11.json; echo
+ok "纯猜胜负带单场玩法项应被拒："
+curl -s -b "$J" -X POST "$BASE/api/admin/events" -H 'Content-Type: application/json' -d @"$SMOKE_TMP"/whl-pure-items.json; echo
+ok "纯猜胜负不配计分方式应被拒："
+curl -s -b "$J" -X POST "$BASE/api/admin/events" -H 'Content-Type: application/json' -d @"$SMOKE_TMP"/whl-pure-nocross.json; echo
+ok "档位全为 0 应被拒（至少要有一档有分）："
+curl -s -b "$J" -X POST "$BASE/api/admin/events" -H 'Content-Type: application/json' -d @"$SMOKE_TMP"/whl-pure-zero.json; echo
+ok "标准形式给 4 场应被拒（上限 3 场）："
+curl -s -b "$J" -X POST "$BASE/api/admin/events" -H 'Content-Type: application/json' -d @"$SMOKE_TMP"/whl-items-4.json; echo
+
+# 10 场纯猜胜负，只配「中 3 场 = 300」「中 5 场 = 500」，其余留空
+node -e '
+  const fs = require("fs"), d = process.argv[1], dl = process.argv[2];
+  fs.writeFileSync(d + "/whl-pure10.json", JSON.stringify({
+    form: "pure", title: "pure wdl 10 matches", deadline: dl, rewardCap: 1000, openNow: true,
+    matches: Array.from({ length: 10 }, (_, i) => ({ home: "H" + i, away: "A" + i, items: [] })),
+    cross: { type: "wdl_all", tiers: { mode: "tiered", hit3: 300, hit5: 500 } }
+  }));
+' "$SMOKE_TMP" "$DEADLINE6"
+CREATE6=$(curl -sf -b "$J" -X POST "$BASE/api/admin/events" -H 'Content-Type: application/json' -d @"$SMOKE_TMP"/whl-pure10.json)
+echo "$CREATE6"
+EID6=$(echo "$CREATE6" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).eventId))")
+VIEW6=$(curl -sf -b "$J" "$BASE/api/events/$EID6")
+INFO6=$(echo "$VIEW6" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const d=JSON.parse(s);console.log([d.form,d.items[0].id].concat(d.matches.map(m=>m.id)).join(' '))})")
+FORM6=$(echo "$INFO6" | cut -d' ' -f1); PC6=$(echo "$INFO6" | cut -d' ' -f2); MIDS6=$(echo "$INFO6" | cut -d' ' -f3-)
+ok "服务端派生 form=$FORM6；跨场次项 id=$PC6；10 场 id=$MIDS6"
+ok "场数=$(echo "$MIDS6" | wc -w)（应为 10）、玩法项=$(echo "$VIEW6" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).items.length))")（应为 1，纯猜胜负没有单场玩法项）"
+# 10 场全部录 1:0（主胜）。sm1 前 4 场猜主胜 = 中 4 场；sm2 前 6 场猜主胜 = 中 6 场
+node -e '
+  const fs = require("fs"), [d, itemId, mids] = process.argv.slice(1);
+  const ids = mids.split(" ").map(Number);
+  fs.writeFileSync(d + "/whl-pure10-hit4.json", JSON.stringify({ predictions: [{ playItemId: Number(itemId),
+    content: Object.fromEntries(ids.map((id, i) => [id, i < 4 ? "home" : "away"])) }] }));
+  fs.writeFileSync(d + "/whl-pure10-hit6.json", JSON.stringify({ predictions: [{ playItemId: Number(itemId),
+    content: Object.fromEntries(ids.map((id, i) => [id, i < 6 ? "home" : "away"])) }] }));
+  const res = (n) => JSON.stringify({ results: ids.slice(0, n).map((id) => ({ matchId: id, home: 1, away: 0 })), fun: [] });
+  fs.writeFileSync(d + "/whl-pure10-res9.json", res(9));
+  fs.writeFileSync(d + "/whl-pure10-res.json", res(10));
+' "$SMOKE_TMP" "$PC6" "$MIDS6"
+curl -sf -b "$U1" -X PUT "$BASE/api/events/$EID6/predictions" -H 'Content-Type: application/json' -d @"$SMOKE_TMP"/whl-pure10-hit4.json > /dev/null
+curl -sf -b "$U2" -X PUT "$BASE/api/events/$EID6/predictions" -H 'Content-Type: application/json' -d @"$SMOKE_TMP"/whl-pure10-hit6.json > /dev/null
+curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID6/seal" > /dev/null
+ok "录结果漏 1 场应被拒（10 场只报 9 场）："
+curl -s -b "$J" -X POST "$BASE/api/admin/events/$EID6/result" -H 'Content-Type: application/json' -d @"$SMOKE_TMP"/whl-pure10-res9.json; echo
+curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID6/result" -H 'Content-Type: application/json' -d @"$SMOKE_TMP"/whl-pure10-res.json > /dev/null
+curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID6/confirm" -H 'Content-Type: application/json' -d '{"overrideCap":false}' > /dev/null
+curl -sf -b "$J" "$BASE/api/admin/events/$EID6" > "$SMOKE_TMP"/whl-pure10-done.json
+node -e '
+  const d = JSON.parse(require("fs").readFileSync(process.env.SMOKE_TMP + "/whl-pure10-done.json", "utf8"));
+  const rows = (d.settlement && d.settlement.detail) || [];
+  const byName = Object.fromEntries(rows.map((r) => [r.name, Number(r.total)]));
+  const tierOf = (n) => (((rows.find((r) => r.name === n) || {}).items || []).flatMap((i) => i.hitTiers || []))[0];
+  const assert = (c, m) => { if (!c) { console.error("  ✗ " + m); process.exit(1); } console.log("  ✓ " + m); };
+  assert(Number(d.settlement.total) === 800, `总发放 800（实得 ${d.settlement.total}）`);
+  assert(byName.sm1 === 300, `中 4 场：hit4 留空 → 往前取 hit3 = 300（实得 ${byName.sm1}）`);
+  assert(byName.sm2 === 500, `中 6 场：hit6 留空 → 往前取 hit5 = 500（实得 ${byName.sm2}）`);
+  assert(tierOf("sm1") === "hit4" && tierOf("sm2") === "hit6", `明细记实际命中场数（实得 ${tierOf("sm1")}/${tierOf("sm2")}）`);
+'
+
+say "15b. 纯猜胜负战报：按命中场数贴档位标签"
+node -e '
+  const crypto=require("crypto");
+  const [secret,base]=process.argv.slice(1);
+  const ts=Math.floor(Date.now()/1000);
+  const sign=crypto.createHmac("sha256",secret).update(`GET|/api/reports/pending|${ts}|`).digest("hex");
+  fetch(base+"/api/reports/pending",{headers:{"X-Timestamp":String(ts),"X-Sign":sign}}).then(r=>r.text()).then(t=>{
+    const rs=JSON.parse(t).reports||[];
+    const hit=rs.find(r=>r.content.includes("pure wdl 10 matches"));
+    const assert=(cond,msg)=>{if(!cond){console.error("  ✗ "+msg);process.exit(1);}console.log("  ✓ "+msg);};
+    assert(!!hit, "待发战报里有 10 场纯猜胜负那一次的");
+    if (hit) {
+      assert(hit.content.includes("🎯 猜胜负"), "战报含「🎯 猜胜负」独立段");
+      assert(hit.content.includes("胜负中 4 场") && hit.content.includes("（+300）"), "标出「胜负中 4 场 （+300）」");
+      assert(hit.content.includes("胜负中 6 场") && hit.content.includes("（+500）"), "标出「胜负中 6 场 （+500）」");
+    }
+  });
+' "$SECRET" "$BASE"
+
 echo
 echo "✅ 冒烟测试跑完，请人工核对上方各步骤返回与期望值"
