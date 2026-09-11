@@ -88,8 +88,16 @@ function itemInput(item, saved) {
 }
 
 function renderMyResult(my, totalAmount) {
+  const mine = my.total ?? 0;
+  const all = totalAmount ?? 0;
+  // 全场为 0 说明无人命中，与「我没中但场上有分」是两回事，分开说
+  const banner = all === 0
+    ? '本次无人命中，没有积分发放'
+    : mine > 0
+      ? `本次竞猜我得 <b>${mine}</b> 分，全场共发放 ${all} 分`
+      : `本次竞猜我没有得分，全场共发放 ${all} 分`;
   return `
-    <div class="banner info">本次竞猜我得 <b>${my.total ?? 0}</b> 分，全场共发放 ${totalAmount ?? 0} 分</div>
+    <div class="banner info">${banner}</div>
     ${my.items?.map((i) => `
       <div class="subitem">
         ${i.hit ? `<span class="hit">命中</span> +${i.reward}` : '<span class="miss">未命中</span>'}

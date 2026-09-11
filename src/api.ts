@@ -560,6 +560,13 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
           .bind(eventId).first()) as any;
         if (done) return replyExisting(done.id);
 
+        if (event.status === 'paid') {
+          // 无人命中时确认发奖不建批次，只把状态推到「已发奖」，重复点击会落到这里
+          return json({
+            ok: true, alreadyConfirmed: true, skipped: true, reason: 'no_hits',
+            batchId: null, payoutCount: 0, unbound: [], dispatch: null,
+          });
+        }
         if (event.status !== 'settled') throw new HttpError(400, '先录结果再确认发奖');
         const body = await readBody(request);
         const st = await env.DB.prepare('SELECT * FROM settlement WHERE event_id = ?').bind(eventId).first() as any;
@@ -567,13 +574,26 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
         const breaches = st.cap_breached as number;
         if (breaches && !body.overrideCap) throw new HttpError(400, '存在奖励超限的玩法项，需勾选「知晓超限」后才能确认');
 
-        const detail = JSON.parse(st.detail_json);
+        const detail = JSON.parse(st.detail_json) as any[];
+        // 无人命中：跳过建批次、发放项与流水，只把状态推到「已发奖」，不留空批次占位
+        if (detail.every((d) => Number(d.total) === 0)) {
+          await env.DB.batch([
+            env.DB.prepare('UPDATE settlement SET confirmed_by = ? WHERE event_id = ?').bind(user.id, eventId),
+            env.DB.prepare(`UPDATE event SET status = 'paid' WHERE id = ?`).bind(eventId),
+          ]);
+          return json({
+            ok: true, skipped: true, reason: 'no_hits', batchId: null,
+            payoutCount: 0, unbound: [], dispatch: null, report: null,
+          });
+        }
         const results = JSON.parse(st.result_json);
         const bindings = (await env.DB.prepare('SELECT user_id, qq_id FROM user_binding').all()).results as any[];
         const qqMap = new Map(bindings.map((b) => [b.user_id, b.qq_id]));
         const payable = detail.filter((d: any) => d.total > 0 && qqMap.has(d.user_id));
         const unbound = detail.filter((d: any) => d.total > 0 && !qqMap.has(d.user_id)).map((d: any) => d.name);
-        if (payable.length === 0) throw new HttpError(400, '没有可发放的奖励（无命中或均未绑定 QQ）');
+        if (payable.length === 0) {
+          throw new HttpError(400, `有 ${unbound.length} 人获得积分但没有绑定 QQ，无法发放：${unbound.join('、')}`);
+        }
 
         const matches = (await env.DB.prepare('SELECT * FROM match WHERE event_id = ? ORDER BY id').bind(eventId).all()).results as any[];
         const items = (await env.DB.prepare(

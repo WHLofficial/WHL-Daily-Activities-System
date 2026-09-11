@@ -222,5 +222,40 @@ else
   echo; echo "(跳过 12：未设置 MOCK_LOG，无法统计插件侧提交次数)"
 fi
 
+say "13. 无人命中：确认发奖跳过批次（状态直接到「已发奖」，不留空批次）"
+DEADLINE3=$(node -e "console.log(new Date(Date.now()+3600e3).toISOString())")
+cat > "$SMOKE_TMP"/whl-create3.json <<JSON
+{"title": "无人命中验证", "deadline": "$DEADLINE3", "rewardCap": 1000, "openNow": true,
+ "matches": [{"home": "热刺", "away": "埃弗顿", "items": [{"type": "score", "tiers": {"score": 300, "goals": 100, "wdl": 50}}]}]}
+JSON
+CREATE3=$(curl -sf -b "$J" -X POST "$BASE/api/admin/events" -H 'Content-Type: application/json' -d @"$SMOKE_TMP"/whl-create3.json)
+EID3=$(echo "$CREATE3" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).eventId))")
+IDS3=$(curl -sf -b "$J" "$BASE/api/events/$EID3" | node -e "
+  let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const d=JSON.parse(s);console.log(d.items[0].id+' '+(d.matches[0]||{}).id)})")
+P3=$(echo "$IDS3" | cut -d' ' -f1); MID3=$(echo "$IDS3" | cut -d' ' -f2)
+# 两人都猜错：实际 3:2（主胜、总进球 5），sm1 猜 0:0（平、0 球），sm2 猜 0:1（客胜、1 球）
+curl -sf -b "$U1" -X PUT "$BASE/api/events/$EID3/predictions" -H 'Content-Type: application/json' -d "{\"predictions\":[{\"playItemId\":$P3,\"content\":{\"home\":0,\"away\":0}}]}" > /dev/null
+curl -sf -b "$U2" -X PUT "$BASE/api/events/$EID3/predictions" -H 'Content-Type: application/json' -d "{\"predictions\":[{\"playItemId\":$P3,\"content\":{\"home\":0,\"away\":1}}]}" > /dev/null
+curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID3/seal" > /dev/null
+echo "  result: $(curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID3/result" -H 'Content-Type: application/json' -d "{\"results\":[{\"matchId\":$MID3,\"home\":3,\"away\":2}],\"fun\":[]}")"
+SKIP=$(curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID3/confirm" -H 'Content-Type: application/json' -d '{"overrideCap":false}')
+echo "  confirm: $SKIP"
+AGAIN3=$(curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID3/confirm" -H 'Content-Type: application/json' -d '{"overrideCap":false}')
+echo "  confirm again: $AGAIN3"
+curl -sf -b "$J" "$BASE/api/admin/events/$EID3" > "$SMOKE_TMP"/whl-nohit.json
+echo "  archive: $(curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID3/archive")"
+node -e '
+  const fs = require("fs");
+  const skip = JSON.parse(process.argv[1]), again = JSON.parse(process.argv[2]);
+  const d = JSON.parse(fs.readFileSync(process.env.SMOKE_TMP + "/whl-nohit.json", "utf8"));
+  const assert = (cond, msg) => { if (!cond) { console.error("  ✗ " + msg); process.exit(1); } console.log("  ✓ " + msg); };
+  assert(Number(d.settlement.total) === 0, `结算总额 0（实得 ${d.settlement.total}）`);
+  assert(skip.skipped === true && skip.ok === true, "确认发奖返回 skipped");
+  assert(skip.payoutCount === 0 && skip.batchId === null, "未建批次、未写发放项");
+  assert(!d.batch, "本次竞猜没有发放批次");
+  assert(d.event.status === "paid", `状态直接到「已发奖」（实得 ${d.event.status}）`);
+  assert(again.alreadyConfirmed === true && again.skipped === true, "重复确认走 alreadyConfirmed，不重复处理");
+' "$SKIP" "$AGAIN3"
+
 echo
 echo "✅ 冒烟测试跑完，请人工核对上方各步骤返回与期望值"

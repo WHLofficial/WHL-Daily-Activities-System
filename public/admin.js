@@ -194,6 +194,7 @@ async function renderManage(id) {
       <div class="row spread">
         <h3>#${e.id} ${esc(e.title)}</h3>
         <span class="badge ${STATUS_CLASS[e.status]}">${STATUS_LABEL[e.status]}</span>
+        ${e.status === 'paid' && !d.batch ? '<span class="badge orange">无人命中</span>' : ''}
       </div>
       <div class="muted">截止 ${fmtTime(e.deadline)} · ${d.predictions.length} 人已提交 · 每项上限 ${e.reward_cap} 分</div>
       <div class="row mt-s">
@@ -321,11 +322,13 @@ async function renderSettlementPreview(d, withConfirm) {
   const st = d.settlement;
   const panel = document.getElementById('settle-panel');
   const breaches = st.breaches || [];
+  const noHit = !st.total;
   const bound = new Map(d.predictions.map((p) => [p.userId, p.qq]));
   panel.innerHTML = `
     <div class="card">
       <h3>结算预览 · 共 ${st.total} 分</h3>
       ${breaches.length ? `<div class="banner warn">超上限玩法项：${breaches.map((b) => `${esc(b.question)}（${b.total}/${b.cap}）`).join('、')}。确认发奖前请勾选「知晓超限」。</div>` : ''}
+      ${noHit ? '<div class="banner info">本次无人命中，确认后直接结案，不会生成发放批次。</div>' : ''}
       <table>
         <tr><th>账号</th><th>QQ</th><th class="num">积分</th><th>明细</th></tr>
         ${st.detail.map((row) => `
@@ -341,7 +344,7 @@ async function renderSettlementPreview(d, withConfirm) {
         <label class="field row ${breaches.length ? '' : 'muted'}" id="ov-row" ${breaches.length ? '' : 'hidden'}>
           <input type="checkbox" id="ov"> <span>知晓超限，仍要发奖</span>
         </label>
-        <div class="row mt"><button class="grow" id="do-confirm">确认发奖（生成批次并同步积分）</button></div>` : ''}
+        <div class="row mt"><button class="grow" id="do-confirm">${noHit ? '确认结案（无人命中）' : '确认发奖（生成批次并同步积分）'}</button></div>` : ''}
     </div>`;
   const btn = document.getElementById('do-confirm');
   if (btn) btn.onclick = () => doConfirm(d, document.getElementById('ov').checked);
@@ -350,9 +353,9 @@ async function renderSettlementPreview(d, withConfirm) {
 async function doConfirm(d, overrideCap) {
   try {
     const r = await api(`/admin/events/${d.event.id}/confirm`, { method: 'POST', body: { overrideCap } });
-    toast(r.alreadyConfirmed
-      ? `这笔竞猜已发过奖（批次 #${r.batchId}）：本次补发到账 ${r.dispatch.credited} 笔`
-      : `发奖批次已创建：${r.payoutCount} 人，已到账 ${r.dispatch.credited} 笔，待重试 ${r.dispatch.unknown} 笔，失败 ${r.dispatch.failed} 笔`);
+    if (r.skipped) toast('本次无人命中，没有积分需要发放');
+    else if (r.alreadyConfirmed) toast(`这笔竞猜已发过奖（批次 #${r.batchId}）：本次补发到账 ${r.dispatch.credited} 笔`);
+    else toast(`发奖批次已创建：${r.payoutCount} 人，已到账 ${r.dispatch.credited} 笔，待重试 ${r.dispatch.unknown} 笔，失败 ${r.dispatch.failed} 笔`);
     if (r.unbound?.length) toast(`未绑定 QQ，未发奖：${r.unbound.join('、')}`, true);
     renderManage(d.event.id);
   } catch (e) {
