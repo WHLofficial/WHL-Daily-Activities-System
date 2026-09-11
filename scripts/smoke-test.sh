@@ -121,6 +121,21 @@ ok "sm3 未绑定 QQ，提交应被拒（403 need_binding）："
 curl -s -b "$U3" -X PUT "$BASE/api/events/$EID/predictions" -H 'Content-Type: application/json' \
   -d "{\"predictions\":[{\"playItemId\":$P_SCORE,\"content\":{\"home\":2,\"away\":1}}]}"; echo
 
+say "5b. 大家的答案：截止前也能看到他人预测，且只给昵称与答案"
+curl -sf -b "$U1" "$BASE/api/events/$EID" > "$SMOKE_TMP"/whl-others.json
+node -e '
+  const fs = require("fs");
+  const d = JSON.parse(fs.readFileSync(process.env.SMOKE_TMP + "/whl-others.json", "utf8"));
+  const assert = (cond, msg) => { if (!cond) { console.error("  ✗ " + msg); process.exit(1); } console.log("  ✓ " + msg); };
+  const names = d.others.map(o => o.name);
+  assert(d.others.length === 1, `sm1 看到 1 位其他参赛者（实得 ${d.others.length}）`);
+  assert(names[0] === "sm2", `看到的是 sm2（实得 ${names[0]}）`);
+  assert(!names.includes("sm1"), "自己的答案不重复列出（页面上有自己的输入框）");
+  assert(d.others[0].items[process.argv[1]] === "home", `sm2 的胜平负答案可见（实得 ${JSON.stringify(d.others[0].items)}）`);
+  assert(d.others[0].total === undefined && d.others[0].hits === undefined, "未结算时不带得分与命中字段");
+  assert(!fs.readFileSync(process.env.SMOKE_TMP + "/whl-others.json", "utf8").includes("10002"), "响应里不含他人 QQ 号");
+' "$P_WDL"
+
 say "6. 提前截止 → 录比分 2:1 + 趣味题命中 sm1（本地 id $U1ID）；hits 里故意塞入未预测的 sm3"
 curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID/seal"; echo
 curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID/result" -H 'Content-Type: application/json' \
@@ -141,6 +156,21 @@ node -e '
   assert(byName["sm2"] === 150, `sm2 = 150（实得 ${byName["sm2"]}）`);
   assert(!rows.some(r => String(r.user_id) === process.argv[1]), `非参与者 sm3（本地 id ${process.argv[1]}）未出现在结算明细里`);
 ' "$U3ID"
+
+say "6c. 结算后「大家的答案」附命中档与得分"
+curl -sf -b "$U1" "$BASE/api/events/$EID" > "$SMOKE_TMP"/whl-others-settled.json
+node -e '
+  const fs = require("fs");
+  const d = JSON.parse(fs.readFileSync(process.env.SMOKE_TMP + "/whl-others-settled.json", "utf8"));
+  const assert = (cond, msg) => { if (!cond) { console.error("  ✗ " + msg); process.exit(1); } console.log("  ✓ " + msg); };
+  const [pScore, pWdl, pFun] = process.argv.slice(1);
+  const o = d.others[0];
+  assert(d.others.length === 1 && o.name === "sm2", `结算后仍只列 sm2（实得 ${d.others.map(x => x.name).join("/")}）`);
+  assert(Number(o.total) === 150, `sm2 总分 150（实得 ${o.total}）`);
+  assert(Number(o.hits[pScore]) === 100, `sm2 的猜比分命中总进球档 +100（实得 ${JSON.stringify(o.hits)}）`);
+  assert(Number(o.hits[pWdl]) === 50, `sm2 的胜平负 +50（实得 ${JSON.stringify(o.hits)}）`);
+  assert(!(pFun in o.hits), "sm2 的趣味题未命中，不进 hits");
+' "$P_SCORE" "$P_WDL" "$P_FUN"
 
 say "7. 确认发奖（SYNC_BASE_URL 指向 mock → 直接 credited；不可达时则 unknown 进重试队列）"
 curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID/confirm" -H 'Content-Type: application/json' -d '{"overrideCap":false}'; echo

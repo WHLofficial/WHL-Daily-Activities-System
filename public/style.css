@@ -115,6 +115,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .hit { color: var(--ok); font-weight: 700; }
 .miss { color: var(--sub); }
 .subitem { margin-left: 14px; font-size: 13px; }
+.other { padding: 10px 0; }
+.other + .other { border-top: 1px dashed var(--line); }
+.other-line { display: flex; align-items: baseline; gap: 8px; font-size: 13px; margin: 4px 0 0 14px; }
+.other-line .muted { flex: 0 0 auto; }
 code.kbd { background: #eceef1; border-radius: 6px; padding: 1px 7px; font-size: 13px; }
 
 /* ---------- 提示条与浮层提示 ---------- */

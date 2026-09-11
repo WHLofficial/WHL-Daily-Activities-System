@@ -106,6 +106,32 @@ function renderMyResult(my, totalAmount) {
       </div>`).join('')}`;
 }
 
+// 大家的答案：只列昵称与答案。结算后（有 hits）附命中档与得分。
+function renderOthers(d) {
+  const others = d.others || [];
+  return `
+    <details class="card">
+      <summary>大家的答案${others.length ? `（${others.length} 人）` : ''}</summary>
+      <div class="muted mt-s">提交后，其他参赛者也能看到你的答案。${others.length ? '' : '还没有别人提交。'}</div>
+      ${others.map((o) => `
+        <div class="other">
+          <div class="row spread">
+            <b>${esc(o.name)}</b>
+            ${o.total != null ? `<span class="badge blue">${o.total} 分</span>` : ''}
+          </div>
+          ${d.items.filter((i) => o.items[i.id] !== undefined).map((i) => {
+            const m = d.matches.find((x) => x.id === i.match_id) || {};
+            const gained = o.hits ? o.hits[i.id] : undefined;
+            return `<div class="other-line">
+              <span class="muted">${esc(m.home || '')} vs ${esc(m.away || '')}</span>
+              <span class="grow">${i.question === TYPE_NAME[i.type] ? '' : `${esc(i.question)}：`}${esc(formatContent(i.type, o.items[i.id]))}</span>
+              ${o.hits ? (gained !== undefined ? `<span class="hit">+${gained}</span>` : '<span class="miss">未中</span>') : ''}
+            </div>`;
+          }).join('')}
+        </div>`).join('')}
+    </details>`;
+}
+
 async function renderDetail(id) {
   const d = await api(`/events/${id}`);
   const e = d.event;
@@ -141,6 +167,7 @@ async function renderDetail(id) {
       </div>`).join('')}
     ${canSubmit ? `
       <div class="row mt"><button class="grow" id="submit">提交预测</button></div>` : ''}
+    ${renderOthers(d)}
   `;
 
   // 胜平负分段选择高亮

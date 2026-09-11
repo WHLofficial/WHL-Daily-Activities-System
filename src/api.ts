@@ -290,16 +290,38 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
            JOIN play_item i ON i.id = p.play_item_id JOIN match m ON m.id = i.match_id
           WHERE m.event_id = ?`,
       ).bind(event.id).first() as any).n;
+      let detail: any[] | null = null;
       if (event.status === 'settled' || event.status === 'paid') {
         const st = await env.DB.prepare('SELECT detail_json, total_amount FROM settlement WHERE event_id = ?').bind(event.id).first() as any;
         if (st) {
-          const detail = JSON.parse(st.detail_json);
-          event.myResult = detail.find((d: any) => d.user_id === user.id) || { total: 0, items: [] };
+          detail = JSON.parse(st.detail_json);
+          event.myResult = detail!.find((d: any) => d.user_id === user.id) || { total: 0, items: [] };
           event.totalAmount = st.total_amount;
         }
       }
+      // 大家的答案：只给昵称与答案，不带 QQ 与内部 id；结算后附命中档与得分。
+      const allPreds = (await env.DB.prepare(
+        `SELECT p.play_item_id, p.user_id, p.content_json, u.display_name, u.username
+           FROM prediction p JOIN users u ON u.id = p.user_id
+           JOIN play_item i ON i.id = p.play_item_id JOIN match m ON m.id = i.match_id
+          WHERE m.event_id = ? ORDER BY p.user_id, p.play_item_id`,
+      ).bind(event.id).all()).results as any[];
+      const byUser = new Map<number, { name: string; items: Record<number, any> }>();
+      for (const p of allPreds) {
+        if (p.user_id === user.id) continue;
+        if (!byUser.has(p.user_id)) byUser.set(p.user_id, { name: p.display_name || p.username, items: {} });
+        byUser.get(p.user_id)!.items[p.play_item_id] = JSON.parse(p.content_json);
+      }
+      const others = [...byUser.entries()].map(([uid, o]) => {
+        const row = detail?.find((d: any) => d.user_id === uid);
+        if (!row) return { name: o.name, items: o.items };
+        const hits = Object.fromEntries(
+          (row.items || []).filter((i: any) => i.hit).map((i: any) => [i.itemId, i.reward]),
+        );
+        return { name: o.name, items: o.items, total: row.total, hits };
+      });
       return json({
-        event, matches, items,
+        event, matches, items, others,
         myPredictions: Object.fromEntries(myPreds.map((p) => [p.play_item_id, JSON.parse(p.content_json)])),
         participants,
       });
