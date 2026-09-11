@@ -140,6 +140,13 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .wdl-other > summary { display: flex; align-items: baseline; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
 .wdl-other > summary .grow { font-weight: 400; }
 .wdl-other .other-line { margin-left: 12px; }
+
+/* ---------- 奖励一览 ---------- */
+.reward-list { margin-top: 10px; }
+.reward-line { padding: 8px 0; }
+.reward-line + .reward-line { border-top: 1px dashed var(--line); }
+.reward-line .q { font-size: 13px; font-weight: 600; }
+.reward-line .muted { font-size: 12px; margin-top: 2px; }
 code.kbd { background: #eceef1; border-radius: 6px; padding: 1px 7px; font-size: 13px; }
 
 /* ---------- 提示条与浮层提示 ---------- */

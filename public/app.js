@@ -55,7 +55,7 @@ async function renderList() {
         <h3>${esc(e.title)}</h3>
         <span class="badge ${STATUS_CLASS[e.status]}">${STATUS_LABEL[e.status]}</span>
       </div>
-      <div class="muted">截止 ${fmtTime(e.deadline)} · ${e.participants} 人参与 · 我已提交 ${e.myPredictions} 题</div>
+      <div class="muted">截止 ${fmtTime(e.deadline)} · 最高可得 ${e.maxScore} 分 · ${e.participants} 人参与 · 我已提交 ${e.myPredictions} 题</div>
     </a>`).join('');
 }
 
@@ -180,6 +180,38 @@ function renderOthers(d) {
     </details>`;
 }
 
+// 奖励一览：填预测之前先看得见能拿多少。逐项列档位，最高可得＝各项最高档之和。
+// 单场次项的题面就是玩法名，摆场次更好认；跨场次项反过来，得报全称与总场数。
+function renderRewards(d) {
+  const max = d.event.maxScore;
+  if (!(max > 0)) return '';
+  const lines = d.items.map((i) => {
+    let label = esc(i.question);
+    if (i.match_id == null) label += `（全部 ${d.matches.length} 场）`;
+    else {
+      const m = d.matches.find((x) => x.id === i.match_id);
+      if (m) label = `${esc(m.home)} vs ${esc(m.away)}`;
+    }
+    return { label, hint: tierHint(i) };
+  }).filter((l) => l.hint);
+  if (lines.length === 0) return '';
+  return `
+    <div class="card">
+      <div class="row spread">
+        <h3>本局奖励</h3>
+        <span class="badge blue">最高可得 ${max} 分</span>
+      </div>
+      <div class="muted">每项按命中档位发分，全部猜中可得 ${max} 分。</div>
+      <div class="reward-list">
+        ${lines.map((l) => `
+          <div class="reward-line">
+            <div class="q">${l.label}</div>
+            <div class="muted">${l.hint}</div>
+          </div>`).join('')}
+      </div>
+    </div>`;
+}
+
 async function renderDetail(id) {
   const d = await api(`/events/${id}`);
   const e = d.event;
@@ -200,8 +232,9 @@ async function renderDetail(id) {
     </div>
     ${canSubmit && me && !me.binding ? `
       <div class="banner warn">提交预测前要先完成 <a href="#/bind">QQ 绑定</a>，绑定后积分才能自动发到你的 QQ 上。</div>` : ''}
+    ${renderRewards(d)}
     ${d.form === 'pure' ? `
-      <div class="banner info">本局共 ${d.matches.length} 场比赛，每场都要选出胜负。猜中的场次越多，得分越高。</div>` : d.matches.map((m) => `
+      <div class="banner info">本局共 ${d.matches.length} 场比赛，每场都要选出胜负。</div>` : d.matches.map((m) => `
       <div class="card">
         <div class="match-head">
           <h3>${esc(m.home)} vs ${esc(m.away)}</h3>

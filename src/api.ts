@@ -12,6 +12,7 @@ import { computeSettlement, type ResultInput } from './_lib/judge.ts';
 import { dispatchPending, signAndFetch } from './_lib/sync.ts';
 import { buildReportText } from './_lib/report.ts';
 import { enqueueOpenNotice, sendDueReminders } from './_lib/notify.ts';
+import { maxRewardOf } from './_lib/reward.ts';
 
 function uuid(): string {
   return crypto.randomUUID();
@@ -110,6 +111,25 @@ function formOf(items: any[]): 'pure' | 'items' {
 const FORM_SQL = `CASE WHEN EXISTS (SELECT 1 FROM play_item i WHERE i.event_id = e.id)
         AND NOT EXISTS (SELECT 1 FROM play_item i WHERE i.event_id = e.id AND i.type <> 'wdl_all')
        THEN 'pure' ELSE 'items' END AS form`;
+
+// 列表页的「最高可得」：一次把这几场竞猜的玩法项与场次数捞回来，在 JS 里按场算，
+// 免得为每场竞猜各发一轮查询。
+async function maxScoreMap(env: any, ids: number[]): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  if (ids.length === 0) return out;
+  const ph = ids.map(() => '?').join(',');
+  const itemRows = (await env.DB.prepare(
+    `SELECT event_id, type, tier_json FROM play_item WHERE event_id IN (${ph})`,
+  ).bind(...ids).all()).results as any[];
+  const matchRows = (await env.DB.prepare(
+    `SELECT event_id, COUNT(*) AS n FROM match WHERE event_id IN (${ph}) GROUP BY event_id`,
+  ).bind(...ids).all()).results as any[];
+  const counts = new Map(matchRows.map((r: any) => [r.event_id, r.n]));
+  for (const id of ids) {
+    out.set(id, maxRewardOf(itemRows.filter((r) => r.event_id === id), counts.get(id) || 0));
+  }
+  return out;
+}
 
 // ---- 路由 ----
 
@@ -324,8 +344,11 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
           WHERE p.user_id = ? GROUP BY i.event_id`,
       ).bind(user.id).all();
       const mineMap = new Map(mine.results.map((r: any) => [r.event_id, r.n]));
+      const maxMap = await maxScoreMap(env, events.map((e: any) => e.id));
       return json({
-        events: events.map((e) => ({ ...e, myPredictions: mineMap.get(e.id) || 0 })),
+        events: events.map((e) => ({
+          ...e, myPredictions: mineMap.get(e.id) || 0, maxScore: maxMap.get(e.id) || 0,
+        })),
       });
     }
 
@@ -339,6 +362,8 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       const items = (await env.DB.prepare(
         `SELECT * FROM play_item WHERE event_id = ? ORDER BY match_id IS NULL, match_id, sort, id`,
       ).bind(event.id).all()).results as any[];
+      // 填预测时先让玩家看见能拿多少：各玩法项最高档之和
+      event.maxScore = maxRewardOf(items, matches.length);
       const myPreds = (await env.DB.prepare(
         `SELECT p.play_item_id, p.content_json FROM prediction p
            JOIN play_item i ON i.id = p.play_item_id

@@ -161,6 +161,21 @@ node -e '
   assert(!fs.readFileSync(process.env.SMOKE_TMP + "/whl-others.json", "utf8").includes("10002"), "响应里不含他人 QQ 号");
 ' "$P_WDL"
 
+say "5c. 奖励一览：列表与详情都带「最高可得」（＝各玩法项最高档之和）"
+curl -sf -b "$U1" "$BASE/api/events" > "$SMOKE_TMP"/whl-list.json
+curl -sf -b "$U1" "$BASE/api/events/$EID" > "$SMOKE_TMP"/whl-max.json
+node -e '
+  const fs = require("fs");
+  const d = JSON.parse(fs.readFileSync(process.env.SMOKE_TMP + "/whl-max.json", "utf8"));
+  const list = JSON.parse(fs.readFileSync(process.env.SMOKE_TMP + "/whl-list.json", "utf8"));
+  const assert = (cond, msg) => { if (!cond) { console.error("  ✗ " + msg); process.exit(1); } console.log("  ✓ " + msg); };
+  // 本场：比分 300 + 胜平负 50 + 趣味 80 = 430（比分项的三个档取最高，不相加）
+  assert(d.event.maxScore === 430, `详情「最高可得 430 分」（实得 ${d.event.maxScore}）`);
+  const row = list.events.find((e) => e.id === Number(process.argv[1]));
+  assert(row && row.maxScore === 430, `列表同一场也带 430（实得 ${row && row.maxScore}）`);
+  assert(d.event.maxScore < d.event.reward_cap, "「最高可得」是真实满分，与兑奖上限不是一回事");
+' "$EID"
+
 say "6. 提前截止 → 录比分 2:1 + 趣味题命中 sm1（本地 id $U1ID）；hits 里故意塞入未预测的 sm3"
 curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID/seal"; echo
 curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID/result" -H 'Content-Type: application/json' \
