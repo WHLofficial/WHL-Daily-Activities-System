@@ -29,32 +29,40 @@ body {
 }
 .topbar .topbar-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
 .topbar .brand { font-size: 16px; font-weight: 800; letter-spacing: .02em; color: #fff; text-decoration: none; }
+/* 文字导航与两个常驻入口归到一组，入口就贴在导航右侧。
+   入口不能写进 .nav-links 里：管理台会把整条 .nav-links 对非管理员隐藏，
+   而未登录/无权限时这两个入口仍要可见。wraps 一层的另一个好处是窄屏能整体换行 */
+.topbar .topbar-nav { display: flex; align-items: center; gap: 16px; min-width: 0; flex-wrap: wrap; }
+.topbar .top-actions { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 /* 顶栏两个常驻入口：形态同款（高度/内边距/圆角/字号一致），用颜色区分。
-   选择器要写成 .topbar .topbar-left 开头，才压得过下方第 53 行的全局 button 规则 */
-.topbar .topbar-left .btn-credit,
-.topbar .topbar-left .btn-tour {
+   选择器要写成 .topbar .top-actions 开头，才压得过下方第 82 行的全局 button 规则 */
+.topbar .top-actions .btn-credit,
+.topbar .top-actions .btn-tour {
   display: inline-flex; align-items: center; min-height: 36px; padding: 6px 12px;
   border-radius: var(--radius-sm); font-family: inherit; font-size: 12px; font-weight: 700;
   line-height: 1; cursor: pointer; white-space: nowrap; text-decoration: none;
 }
-.topbar .topbar-left .btn-credit {
+.topbar .top-actions .btn-credit {
   border: 1px solid #e0a93e;
   background: linear-gradient(180deg, #f6d878, #e0a93e); color: #3d2e05;
   box-shadow: 0 0 10px rgba(240,190,70,.75), 0 0 22px rgba(240,190,70,.4);
 }
-.topbar .topbar-left .btn-credit:hover {
+.topbar .top-actions .btn-credit:hover {
   filter: brightness(1.07);
   box-shadow: 0 0 14px rgba(240,190,70,.95), 0 0 30px rgba(240,190,70,.55);
 }
-/* 去赛事平台：底色用它自己的品牌绿 #0e7a46，字色用它的 --pitch-deep #0a3d24 */
-.topbar .topbar-left .btn-tour {
-  border: 1px solid #0e7a46;
-  background: linear-gradient(180deg, #42b273, #0e7a46); color: #0a3d24;
-  box-shadow: 0 0 10px rgba(40,190,110,.7), 0 0 22px rgba(40,190,110,.35);
+/* 去赛事平台：用赛事平台的球场绿，草坪条纹 + 顶边高光，避免整块纯绿显平 */
+.topbar .top-actions .btn-tour {
+  border: 1px solid #0a3d24;
+  background:
+    repeating-linear-gradient(90deg, rgba(255,255,255,.06) 0 9px, rgba(255,255,255,0) 9px 18px),
+    linear-gradient(180deg, #0e7a46, #0b6a3d 55%, #0a3d24);
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.22), 0 0 10px rgba(40,190,110,.6), 0 0 22px rgba(40,190,110,.32);
 }
-.topbar .topbar-left .btn-tour:hover {
+.topbar .top-actions .btn-tour:hover {
   filter: brightness(1.07);
-  box-shadow: 0 0 14px rgba(40,190,110,.9), 0 0 30px rgba(40,190,110,.5);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.28), 0 0 14px rgba(40,190,110,.85), 0 0 30px rgba(40,190,110,.45);
 }
 .topbar .nav-links { display: flex; align-items: center; gap: 16px; }
 .topbar .nav-links a,
@@ -221,7 +229,9 @@ code.kbd { background: #eceef1; border-radius: 6px; padding: 1px 7px; font-size:
   .topbar { padding: 10px 14px; row-gap: 8px; }
   .topbar .topbar-left { gap: 10px; }
   .topbar .brand { font-size: 15px; }
-  .topbar .topbar-left .btn-credit, .topbar .topbar-left .btn-tour { min-height: 30px; padding: 4px 9px; font-size: 11px; }
+  .topbar .topbar-nav { gap: 10px; }
+  .topbar .top-actions { gap: 8px; }
+  .topbar .top-actions .btn-credit, .topbar .top-actions .btn-tour { min-height: 30px; padding: 4px 9px; font-size: 11px; }
   .topbar .nav-links, .topbar .userbox { gap: 10px; font-size: 13px; }
   .topbar .nav-links a, .topbar .nav-tab { font-size: 13px; }
   .wrap { padding: 12px 12px 64px; }

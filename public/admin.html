@@ -10,13 +10,17 @@
 <header class="topbar">
   <div class="topbar-left">
     <a class="brand" href="./index.html">🎯 WHL 竞猜系统</a>
-    <button class="btn-credit" id="btn-credit" type="button">🏅鸣谢</button>
-    <a class="btn-tour" id="btn-tour" href="https://tour.whleague.win" target="_blank" rel="noopener noreferrer">去赛事平台↗</a>
   </div>
-  <nav class="nav-links">
-    <button class="nav-tab is-active" id="tab-events" type="button">竞猜管理</button>
-    <button class="nav-tab" id="tab-recon" type="button">积分对账</button>
-  </nav>
+  <div class="topbar-nav">
+    <nav class="nav-links">
+      <button class="nav-tab is-active" id="tab-events" type="button">竞猜管理</button>
+      <button class="nav-tab" id="tab-recon" type="button">积分对账</button>
+    </nav>
+    <span class="top-actions">
+      <button class="btn-credit" id="btn-credit" type="button">🏅鸣谢</button>
+      <a class="btn-tour" id="btn-tour" href="https://tour.whleague.win" target="_blank" rel="noopener noreferrer">去赛事平台↗</a>
+    </span>
+  </div>
   <span class="userbox" id="userbox" hidden>
     <span id="user-name"></span>
     <span class="role-badge" id="user-role"></span>
