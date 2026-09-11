@@ -2,7 +2,7 @@
 import {
   api, fmtTime, countdown, STATUS_LABEL, STATUS_CLASS, esc, toast,
   TYPE_NAME, TIER_LABEL, CREATE_TYPES, ROLE_NAME, formatContent, roleLabel,
-  BATCH_STATUS, PAYOUT_STATUS, statusPill, PASSWORD_FORM, wirePassword,
+  BATCH_STATUS, PAYOUT_STATUS, statusPill, PASSWORD_FORM, wirePassword, initTopbar,
 } from './core.js';
 
 const app = document.getElementById('app');
@@ -509,6 +509,9 @@ function renderTopbar() {
     document.getElementById('user-role').textContent = roleLabel(user, me.is_initiator);
   }
 }
+
+// 顶栏的两个常驻入口与登录态无关，启动时接一次线就够
+initTopbar();
 
 let logoutTimer = null;
 function resetLogout() {

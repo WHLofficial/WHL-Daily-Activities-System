@@ -29,12 +29,33 @@ body {
 }
 .topbar .topbar-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
 .topbar .brand { font-size: 16px; font-weight: 800; letter-spacing: .02em; color: #fff; text-decoration: none; }
-.topbar .top-link {
-  display: inline-flex; align-items: center; min-height: 28px; padding: 3px 10px;
-  border: 1px solid rgba(255,255,255,.45); border-radius: var(--radius-sm);
-  font-size: 13px; color: #fff; text-decoration: none; white-space: nowrap;
+/* 顶栏两个常驻入口：形态同款（高度/内边距/圆角/字号一致），用颜色区分。
+   选择器要写成 .topbar .topbar-left 开头，才压得过下方第 53 行的全局 button 规则 */
+.topbar .topbar-left .btn-credit,
+.topbar .topbar-left .btn-tour {
+  display: inline-flex; align-items: center; min-height: 36px; padding: 6px 12px;
+  border-radius: var(--radius-sm); font-family: inherit; font-size: 12px; font-weight: 700;
+  line-height: 1; cursor: pointer; white-space: nowrap; text-decoration: none;
 }
-.topbar .top-link:hover { background: rgba(255,255,255,.12); }
+.topbar .topbar-left .btn-credit {
+  border: 1px solid #e0a93e;
+  background: linear-gradient(180deg, #f6d878, #e0a93e); color: #3d2e05;
+  box-shadow: 0 0 10px rgba(240,190,70,.75), 0 0 22px rgba(240,190,70,.4);
+}
+.topbar .topbar-left .btn-credit:hover {
+  filter: brightness(1.07);
+  box-shadow: 0 0 14px rgba(240,190,70,.95), 0 0 30px rgba(240,190,70,.55);
+}
+/* 去赛事平台：底色用它自己的品牌绿 #0e7a46，字色用它的 --pitch-deep #0a3d24 */
+.topbar .topbar-left .btn-tour {
+  border: 1px solid #0e7a46;
+  background: linear-gradient(180deg, #42b273, #0e7a46); color: #0a3d24;
+  box-shadow: 0 0 10px rgba(40,190,110,.7), 0 0 22px rgba(40,190,110,.35);
+}
+.topbar .topbar-left .btn-tour:hover {
+  filter: brightness(1.07);
+  box-shadow: 0 0 14px rgba(40,190,110,.9), 0 0 30px rgba(40,190,110,.5);
+}
 .topbar .nav-links { display: flex; align-items: center; gap: 16px; }
 .topbar .nav-links a,
 .topbar .nav-tab { background: none; border: none; padding: 0; font: inherit; font-size: 14px; color: #dbe6ff; text-decoration: none; cursor: pointer; white-space: nowrap; }
@@ -164,12 +185,43 @@ code.kbd { background: #eceef1; border-radius: 6px; padding: 1px 7px; font-size:
 .toast.err { background: var(--bad); }
 .toast.multi { border-radius: var(--radius-md); }
 
+/* ---------- 鸣谢弹层（顶栏「🏅鸣谢」入口） ---------- */
+.credit {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  /* 遮罩用本站墨色的透明版，跟外站的深色底不同源 */
+  background: rgba(26,29,33,.55);
+  backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px);
+  padding: 20px;
+}
+.credit-card {
+  position: relative; width: 100%; max-width: 430px;
+  background: var(--card); border: 1px solid #e0a93e; border-radius: 14px;
+  padding: 22px 24px 20px; text-align: center;
+  box-shadow: 0 12px 48px rgba(26,29,33,.5), 0 0 26px rgba(240,190,70,.4);
+}
+.credit-title { margin: 0 0 10px; font-size: 20px; font-weight: 700; color: #8a6414; }
+.credit-main { margin: 0 0 14px; font-size: 15px; line-height: 1.7; }
+.credit-main b { color: #8a6414; }
+.credit-quote {
+  margin: 0; padding: 12px 14px; border-left: 3px solid #e0a93e;
+  background: rgba(240,190,70,.12); border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 14px; line-height: 1.75; text-align: left;
+}
+.credit-quote cite { display: block; margin-top: 8px; text-align: right; font-style: normal; color: var(--sub); font-size: 12.5px; }
+.credit-close {
+  position: absolute; top: 10px; right: 10px; width: 32px; height: 32px; padding: 0;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: #fff;
+  color: var(--sub); font: 700 15px/1 inherit; cursor: pointer;
+}
+.credit-close:hover:not(:disabled) { background: #fff; color: var(--bad); border-color: var(--bad); }
+
 /* ---------- 窄屏 ---------- */
 @media (max-width: 640px) {
   .topbar { padding: 10px 14px; row-gap: 8px; }
   .topbar .topbar-left { gap: 10px; }
   .topbar .brand { font-size: 15px; }
-  .topbar .top-link { min-height: 26px; padding: 2px 8px; font-size: 12px; }
+  .topbar .topbar-left .btn-credit, .topbar .topbar-left .btn-tour { min-height: 30px; padding: 4px 9px; font-size: 11px; }
   .topbar .nav-links, .topbar .userbox { gap: 10px; font-size: 13px; }
   .topbar .nav-links a, .topbar .nav-tab { font-size: 13px; }
   .wrap { padding: 12px 12px 64px; }

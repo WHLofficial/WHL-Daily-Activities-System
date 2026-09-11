@@ -1,7 +1,7 @@
 // 用户端 SPA（无框架，hash 路由）：#/ 竞猜列表 · #/event/:id 详情 · #/bind 绑定 QQ · #/password 改密码
 import {
   api, fmtTime, countdown, STATUS_LABEL, STATUS_CLASS, esc, toast,
-  TYPE_NAME, TIER_LABEL, WDL_NAME, formatContent, roleLabel, PASSWORD_FORM, wirePassword,
+  TYPE_NAME, TIER_LABEL, WDL_NAME, formatContent, roleLabel, PASSWORD_FORM, wirePassword, initTopbar,
 } from './core.js';
 
 const app = document.getElementById('app');
@@ -363,6 +363,9 @@ function renderTopbar() {
     document.getElementById('user-role').textContent = roleLabel(user, me.is_initiator);
   }
 }
+
+// 顶栏的两个常驻入口与登录态无关，启动时接一次线就够
+initTopbar();
 
 let logoutTimer = null;
 function resetLogout() {
