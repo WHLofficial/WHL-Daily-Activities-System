@@ -60,7 +60,8 @@ function validateContent(type: string, content: any): string {
   throw new HttpError(400, `未知玩法类型 ${type}`);
 }
 
-function validateTiers(type: string, tiers: any): string {
+// matchCount：跨场次玩法的档位按实际场数给（纯猜胜负最多 10 场，键为 hit1..hitN）。
+function validateTiers(type: string, tiers: any, matchCount = 3): string {
   if (!tiers || typeof tiers !== 'object') throw new HttpError(400, '档位配置不合法');
   if (type === 'wdl_all') {
     // 两种计分模式：tiered 按命中的场数给一档分数，per_hit 每命中一场给固定分。
@@ -69,14 +70,19 @@ function validateTiers(type: string, tiers: any): string {
       if (!Number.isInteger(v) || v <= 0 || v > 100000) throw new HttpError(400, '每命中一场的积分必须是 1~100000 的整数');
       return JSON.stringify({ mode: 'per_hit', perHit: v });
     }
+    // 档位可以留空或填 0，表示不单独设这一档：判分时从命中的场数往前找第一个有分的档
+    // （只配了中 3 场、中 5 场，那么中 4 场也拿「中 3 场」的分）。
     const out: Record<string, number | string> = { mode: 'tiered' };
-    for (const k of ['hit1', 'hit2', 'hit3']) {
+    let configured = 0;
+    for (let n = 1; n <= matchCount; n++) {
+      const k = `hit${n}`;
       const v = tiers[k];
-      if (v === undefined) continue;
-      if (!Number.isInteger(v) || v <= 0 || v > 100000) throw new HttpError(400, `档位 ${k} 必须是 1~100000 的整数`);
+      if (v === undefined || v === null || v === 0 || v === '') continue;
+      if (!Number.isInteger(v) || v < 0 || v > 100000) throw new HttpError(400, `档位 ${k} 必须是 1~100000 的整数`);
       out[k] = v;
+      configured++;
     }
-    if (out.hit1 === undefined) throw new HttpError(400, '猜胜负至少要配置「命中 1 场」的积分');
+    if (configured === 0) throw new HttpError(400, '「猜胜负」至少要配置一档积分');
     return JSON.stringify(out);
   }
   const out: Record<string, number> = {};
@@ -93,6 +99,16 @@ function validateTiers(type: string, tiers: any): string {
   }
   return JSON.stringify(out);
 }
+
+// 玩法形式不落库，由玩法项派生：只有跨场次的「猜胜负」= 纯猜胜负局，其余都是标准形式。
+function formOf(items: any[]): 'pure' | 'items' {
+  return items.length > 0 && items.every((i) => i.type === 'wdl_all') ? 'pure' : 'items';
+}
+
+// 列表页没有玩法项明细，用这条 SQL 现算同一个判定。
+const FORM_SQL = `CASE WHEN EXISTS (SELECT 1 FROM play_item i WHERE i.event_id = e.id)
+        AND NOT EXISTS (SELECT 1 FROM play_item i WHERE i.event_id = e.id AND i.type <> 'wdl_all')
+       THEN 'pure' ELSE 'items' END AS form`;
 
 // ---- 路由 ----
 
@@ -286,7 +302,7 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
     if (method === 'GET' && seg[0] === 'events' && seg.length === 1) {
       const user = await requireUser(env, request);
       const events = (await env.DB.prepare(
-        `SELECT e.*, (SELECT COUNT(DISTINCT p.user_id) FROM prediction p
+        `SELECT e.*, ${FORM_SQL}, (SELECT COUNT(DISTINCT p.user_id) FROM prediction p
                         JOIN play_item i ON i.id = p.play_item_id
                        WHERE i.event_id = e.id) AS participants
            FROM event e WHERE e.status != 'draft' ORDER BY e.created_at DESC LIMIT 20`,
@@ -344,16 +360,27 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
         if (!byUser.has(p.user_id)) byUser.set(p.user_id, { name: p.display_name || p.username, items: {} });
         byUser.get(p.user_id)!.items[p.play_item_id] = JSON.parse(p.content_json);
       }
+      // 跨场次项的「命中场数」写在结算明细的档位里（hit3 = 命中 3 场）：纯猜胜负局
+      // 场次多，列表上要按人显示命中几场，光看分数认不出是蒙的还是真会猜。
+      const crossIds = new Set(items.filter((i: any) => i.type === 'wdl_all').map((i: any) => i.id));
+      const hitCountsOf = (row: any) => Object.fromEntries(
+        (row.items || [])
+          .filter((i: any) => crossIds.has(i.itemId))
+          .map((i: any) => {
+            const m = /^hit(\d+)$/.exec(String(i.tier || ''));
+            return [i.itemId, i.hit && m ? Number(m[1]) : 0];
+          }),
+      );
       const others = [...byUser.entries()].map(([uid, o]) => {
         const row = detail?.find((d: any) => d.user_id === uid);
         if (!row) return { name: o.name, items: o.items };
         const hits = Object.fromEntries(
           (row.items || []).filter((i: any) => i.hit).map((i: any) => [i.itemId, i.reward]),
         );
-        return { name: o.name, items: o.items, total: row.total, hits };
+        return { name: o.name, items: o.items, total: row.total, hits, hitCounts: hitCountsOf(row) };
       });
       return json({
-        event, matches, items, others,
+        event, matches, items, others, form: formOf(items),
         myPredictions: Object.fromEntries(myPreds.map((p) => [p.play_item_id, JSON.parse(p.content_json)])),
         participants,
       });
@@ -456,10 +483,10 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       // 管理列表：包含草稿
       if (method === 'GET' && seg[1] === 'events' && seg.length === 2) {
         const events = (await env.DB.prepare(
-          `SELECT e.*, (SELECT COUNT(DISTINCT p.user_id) FROM prediction p
-                          JOIN play_item i ON i.id = p.play_item_id
-                         WHERE i.event_id = e.id) AS participants
-             FROM event e ORDER BY e.created_at DESC LIMIT 50`,
+        `SELECT e.*, ${FORM_SQL}, (SELECT COUNT(DISTINCT p.user_id) FROM prediction p
+                        JOIN play_item i ON i.id = p.play_item_id
+                       WHERE i.event_id = e.id) AS participants
+           FROM event e ORDER BY e.created_at DESC LIMIT 50`,
         ).all()).results;
         return json({ events });
       }
@@ -473,7 +500,15 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
         const rewardCap = Number(body.rewardCap);
         if (!Number.isInteger(rewardCap) || rewardCap <= 0) throw new HttpError(400, '奖励上限不合法');
         const matches: any[] = body.matches || [];
-        if (matches.length < 1 || matches.length > 3) throw new HttpError(400, '比赛场次 1~3 场');
+        // 两种玩法形式：pure = 纯猜胜负（只有一个跨场次的「猜胜负」，2~10 场）；
+        // items = 标准（每场 1~6 个玩法项，1~3 场，另可选一个跨场次「猜胜负」）。
+        const form: 'pure' | 'items' = body.form === 'pure' ? 'pure' : 'items';
+        if (form === 'pure') {
+          if (matches.length < 2) throw new HttpError(400, '「纯猜胜负」至少需要 2 场比赛');
+          if (matches.length > 10) throw new HttpError(400, '「纯猜胜负」最多 10 场比赛');
+        } else if (matches.length < 1 || matches.length > 3) {
+          throw new HttpError(400, '比赛场次 1~3 场');
+        }
 
         // 先整体校验再落库：任何一项不合法都直接拒绝，不留半成品竞猜
         const matchRows: { home: string; away: string; kickoff: any }[] = [];
@@ -485,6 +520,10 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
             kickoff: m.kickoff || null,
           });
           const items: any[] = m.items || [];
+          if (form === 'pure') {
+            if (items.length > 0) throw new HttpError(400, '「纯猜胜负」不设单场玩法项');
+            return;
+          }
           if (items.length < 1 || items.length > 6) throw new HttpError(400, '每场比赛 1~6 个玩法项');
           for (let i = 0; i < items.length; i++) {
             const it = items[i];
@@ -497,7 +536,8 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
           }
         });
 
-        // 跨场次玩法：一次竞猜最多一个，押的是全部场次的胜负
+        // 跨场次玩法：一次竞猜最多一个，押的是全部场次的胜负；纯猜胜负局必须有它
+        if (form === 'pure' && !body.cross) throw new HttpError(400, '「纯猜胜负」需要配置计分方式');
         if (body.cross) {
           const c = body.cross;
           if (String(c.type) !== 'wdl_all') throw new HttpError(400, `未知玩法类型 ${c.type}`);
@@ -505,7 +545,7 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
           itemRows.push({
             mi: null, type: 'wdl_all',
             question: String(c.question || '').trim() || '猜胜负',
-            tierJson: validateTiers('wdl_all', c.tiers),
+            tierJson: validateTiers('wdl_all', c.tiers, matches.length),
             cap: c.cap ? Number(c.cap) : null, sort: 0,
           });
         }
@@ -563,7 +603,7 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
         const st = await env.DB.prepare('SELECT * FROM settlement WHERE event_id = ?').bind(eventId).first() as any;
         const batch = await env.DB.prepare('SELECT * FROM payout_batch WHERE event_id = ?').bind(eventId).first() as any;
         return json({
-          event, matches, items,
+          event, matches, items, form: formOf(items),
           predictions: preds.map((p) => ({
             userId: p.user_id, name: p.display_name, playItemId: p.play_item_id,
             content: JSON.parse(p.content_json), qq: qqMap.get(p.user_id) || null,
@@ -612,6 +652,9 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
         for (const f of input.fun) {
           if (!items.some((i) => i.id === f.itemId && i.type === 'fun')) throw new HttpError(400, '趣味题不属于本次竞猜');
         }
+        // 场次必须录齐：漏录的场次在判分时查不到比分，会静默按不得分算，用户看不出哪里错了
+        const missing = matches.filter((m) => !input.results.some((r) => r.matchId === m.id));
+        if (missing.length) throw new HttpError(400, `还有 ${missing.length} 场比赛没录入比分`);
         const preds = (await env.DB.prepare(
           `SELECT p.play_item_id, p.user_id, p.content_json FROM prediction p
              JOIN play_item i ON i.id = p.play_item_id WHERE i.event_id = ?`,
