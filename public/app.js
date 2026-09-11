@@ -55,7 +55,7 @@ async function renderList() {
         <h3>${esc(e.title)}</h3>
         <span class="badge ${STATUS_CLASS[e.status]}">${STATUS_LABEL[e.status]}</span>
       </div>
-      <div class="muted">截止 ${fmtTime(e.deadline)} · 最高可得 ${e.maxScore} 分 · ${e.participants} 人参与 · 我已提交 ${e.myPredictions} 题</div>
+      <div class="muted">截止 ${fmtTime(e.deadline)} · 最高可得 ${e.maxScore} 分 · ${e.participants} 人参与 · ${e.myPredictions ? `我已提交 ${e.myPredictions} 题` : '我还没提交'}</div>
     </a>`).join('');
 }
 
@@ -141,7 +141,7 @@ function renderOthers(d) {
   return `
     <details class="card">
       <summary>大家的答案${others.length ? `（${others.length} 人）` : ''}</summary>
-      <div class="muted mt-s">提交后，其他参赛者也能看到你的答案。${others.length ? '' : '还没有别人提交。'}</div>
+      <div class="muted mt-s">提交后，其他参赛者也能看到你的答案。${others.length ? '' : '目前还没有其他人提交。'}</div>
       ${others.map((o) => `
         <div class="other">
           <div class="row spread">
@@ -181,7 +181,8 @@ function renderOthers(d) {
 }
 
 // 奖励一览：填预测之前先看得见能拿多少。逐项列档位，最高可得＝各项最高档之和。
-// 单场次项的题面就是玩法名，摆场次更好认；跨场次项反过来，得报全称与总场数。
+// 一场可以有多项玩法，光写「主队 vs 客队」区分不开，所以场次后面缀上题面；
+// 跨场次项反过来：题面就是玩法名，需要补的是总场数。
 function renderRewards(d) {
   const max = d.event.maxScore;
   if (!(max > 0)) return '';
@@ -190,7 +191,7 @@ function renderRewards(d) {
     if (i.match_id == null) label += `（全部 ${d.matches.length} 场）`;
     else {
       const m = d.matches.find((x) => x.id === i.match_id);
-      if (m) label = `${esc(m.home)} vs ${esc(m.away)}`;
+      if (m) label = `${esc(m.home)} vs ${esc(m.away)} · ${label}`;
     }
     return { label, hint: tierHint(i) };
   }).filter((l) => l.hint);
