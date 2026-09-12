@@ -39,7 +39,7 @@ npx wrangler d1 create whl-guess --location apac
 npx wrangler d1 migrations apply whl-guess --remote
 ```
 
-✅ 验证：输出显示 5 个迁移（`0001_init.sql` / `0002_tour_auth.sql` / `0003_exhausted.sql` / `0004_payout_claim.sql` / `0005_wdl_all.sql`）均应用成功。
+✅ 验证：输出显示 7 个迁移（`0001_init.sql` / `0002_tour_auth.sql` / `0003_exhausted.sql` / `0004_payout_claim.sql` / `0005_wdl_all.sql` / `0006_notify_remind.sql` / `0007_indexes.sql`）均应用成功。
 
 > 已上线的库加列或改表时，别忘了先 `npx wrangler d1 migrations apply whl-guess --remote` 再 `wrangler deploy`：新代码会用到新列（如 `payout_item.claim_at`）或新表结构（如 `play_item.event_id`，0005 会重建 `play_item` 与 `prediction`）。
 
@@ -67,7 +67,7 @@ npx wrangler secret put SYNC_BASE_URL   # 插件的公网 HTTPS 地址，见下�
 
 > ⚠️ `SYNC_BASE_URL` 只能填**域名形式的 HTTPS 地址**（例如 `https://astrbot.whleague.win`）。Cloudflare 的生产环境对 IP 字面量（如 `http://1.2.3.4:9991`）一律拒绝，发奖会直接返回 HTTP 403 / Cloudflare error 1003；`http://127.0.0.1:xxx` 之类的占位符同样不行。隧道（第五步）没通之前先别急着发奖——先把这个 secret 留空或填真实域名，隧道验证通过后再补。
 
-cron（每 5 分钟重试未到账发放项 + 扫「截止前 4 小时」的提醒；每日 09:00 对账）已内置在 Worker 里，**没有独立 cron 服务要部署**。
+cron（每 5 分钟：把过截止时间的开放竞猜自动置为「已截止」+ 重试未到账发放项 + 扫「截止前 4 小时」的提醒；每日 09:00 对账）已内置在 Worker 里，**没有独立 cron 服务要部署**。也可用 `X-Cron-Key` 手动补扫：`POST /api/internal/{seal|retry|remind|recon}`。
 
 ---
 
