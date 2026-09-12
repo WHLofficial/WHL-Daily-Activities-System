@@ -107,7 +107,28 @@ async function getTourSessionUser(env: any, request: Request): Promise<any | nul
   return { ...local, mustChangePw: tour.must_change_pw === 1 };
 }
 
+// ---- 鉴权按请求记忆化 ----
+// requirePwChanged 与 requireUser 在同一请求里会各解析一遍鉴权，历史上等于把
+// D1/TOUR_DB/KV 往返翻倍。Request 实例每次请求唯一、随请求一起被回收，
+// 用 WeakMap 挂缓存即可，不需要改任何调用方的签名。
+const authMemo = new WeakMap<Request, { resolved?: boolean; user?: any; initiator?: Map<number, boolean> }>();
+
+function memoFor(request: Request) {
+  let m = authMemo.get(request);
+  if (!m) { m = {}; authMemo.set(request, m); }
+  return m;
+}
+
 export async function getAuthUser(env: any, request: Request): Promise<any | null> {
+  const m = memoFor(request);
+  if (m.resolved) return m.user;
+  const user = await resolveAuthUser(env, request);
+  m.user = user;
+  m.resolved = true;
+  return user;
+}
+
+async function resolveAuthUser(env: any, request: Request): Promise<any | null> {
   const tour = await getTourSessionUser(env, request).catch((e: any) => {
     console.error('[tour-auth] failed:', e?.message || e);
     return null;
@@ -131,15 +152,24 @@ async function tourMustChangePw(env: any, tourId: number | null): Promise<boolea
   return row?.must_change_pw === 1;
 }
 
-export async function isInitiator(env: any, userId: number): Promise<boolean> {
+export async function isInitiator(env: any, userId: number, request?: Request): Promise<boolean> {
+  if (!request) {
+    const row = await env.DB.prepare('SELECT 1 AS ok FROM initiators WHERE user_id = ?').bind(userId).first();
+    return !!row;
+  }
+  const m = memoFor(request);
+  if (!m.initiator) m.initiator = new Map();
+  if (m.initiator.has(userId)) return m.initiator.get(userId)!;
   const row = await env.DB.prepare('SELECT 1 AS ok FROM initiators WHERE user_id = ?').bind(userId).first();
-  return !!row;
+  const ok = !!row;
+  m.initiator.set(userId, ok);
+  return ok;
 }
 
 // 开放竞猜/截止/录比分/结算/确认发奖：仅管理员或发起人可进行此操作
 export async function requireManager(env: any, request: Request): Promise<any> {
   const user = await requireUser(env, request);
-  if (user.role !== 'admin' && !(await isInitiator(env, user.id))) {
+  if (user.role !== 'admin' && !(await isInitiator(env, user.id, request))) {
     throw new HttpError(403, '仅管理员或发起人可进行此操作');
   }
   return user;
