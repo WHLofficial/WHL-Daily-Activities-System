@@ -132,15 +132,28 @@ function renderMyResult(my, totalAmount, matches) {
 }
 
 // 大家的答案：只列昵称与答案。结算后（有 hits）附命中场数与得分。
-// 「猜胜负」覆盖全部场次，纯猜胜负局足有十场，逐场铺开会把名单拉得极长，
-// 所以按人一行，逐场明细收进可展开的 details。
+// 猜胜负是跨场玩法，每人的逐场选择压成一串「胜平负负负」直接常开展示：
+// 结算后按服务端下发的 matchHits 把命中的字标绿、未中灰；漏选的场用灰「？」占位。
+const WDL_CHAR = { home: '胜', draw: '平', away: '负' };
+
+function wdlString(picks, matches, matchHits) {
+  return matches.map((m) => {
+    const pick = picks[m.id];
+    if (!pick) return '<span class="muted">？</span>';
+    const ch = WDL_CHAR[pick];
+    if (!ch) return '<span class="muted">？</span>';
+    if (!matchHits || matchHits[m.id] === undefined) return esc(ch);
+    return `<span class="${matchHits[m.id] ? 'hit' : 'miss'}">${ch}</span>`;
+  }).join('');
+}
+
 function renderOthers(d) {
   const others = d.others || [];
   const single = d.items.filter((i) => i.match_id != null);
   const cross = d.items.filter((i) => i.match_id == null);
   return `
-    <details class="card">
-      <summary>大家的答案${others.length ? `（${others.length} 人）` : ''}</summary>
+    <div class="card">
+      <h3>大家的答案${others.length ? `（${others.length} 人）` : ''}</h3>
       <div class="muted mt-s">提交后，其他参赛者也能看到你的答案。${others.length ? '' : '目前还没有其他人提交。'}</div>
       ${others.map((o) => `
         <div class="other">
@@ -158,26 +171,16 @@ function renderOthers(d) {
             </div>`;
           }).join('')}
           ${cross.filter((i) => o.items[i.id] !== undefined).map((i) => {
-            const picked = o.items[i.id] || {};
             const gained = o.hits ? o.hits[i.id] : undefined;
             const hits = (o.hitCounts && o.hitCounts[i.id]) || 0;
-            return `<details class="wdl-other">
-              <summary>
-                <span class="muted">${esc(i.question)}</span>
-                <span class="grow">${o.hits
-                  ? `<span class="${gained !== undefined ? 'hit' : 'miss'}">命中 ${hits} 场</span> / 共 ${d.matches.length} 场`
-                  : `已选 ${Object.keys(picked).length} 场 / 共 ${d.matches.length} 场`}</span>
-                ${o.hits ? (gained !== undefined ? `<span class="hit">+${gained}</span>` : '') : ''}
-              </summary>
-              ${d.matches.map((m) => `
-                <div class="other-line">
-                  <span class="muted">${esc(m.home)} vs ${esc(m.away)}</span>
-                  <span class="grow">${WDL_NAME[picked[m.id]] || '<span class="miss">未选</span>'}</span>
-                </div>`).join('')}
-            </details>`;
+            return `<div class="other-line">
+              <span class="muted">${esc(i.question)}</span>
+              <span class="grow wdl-string">${wdlString(o.items[i.id], d.matches, o.matchHits && o.matchHits[i.id])}</span>
+              ${o.hits ? `<span class="${gained !== undefined ? 'hit' : 'miss'}">命中 ${hits} 场</span>${gained !== undefined ? `<span class="hit">+${gained}</span>` : ''}` : ''}
+            </div>`;
           }).join('')}
         </div>`).join('')}
-    </details>`;
+    </div>`;
 }
 
 // 奖励一览：填预测之前先看得见能拿多少。逐项列档位，最高可得＝各项最高档之和。

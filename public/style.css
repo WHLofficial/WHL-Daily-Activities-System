@@ -164,11 +164,9 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .other + .other { border-top: 1px dashed var(--line); }
 .other-line { display: flex; align-items: baseline; gap: 8px; font-size: 13px; margin: 4px 0 0 14px; }
 .other-line .muted { flex: 0 0 auto; }
-/* 「大家的答案」里「猜胜负」的逐场明细：收在可展开行内，跟别人的答案行同款排版 */
-.wdl-other { margin: 6px 0 0 14px; }
-.wdl-other > summary { display: flex; align-items: baseline; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
-.wdl-other > summary .grow { font-weight: 400; }
-.wdl-other .other-line { margin-left: 12px; }
+/* 「大家的答案」里「猜胜负」的紧凑串：逐字「胜平负负负」，命中/未中复用 hit/miss 着色 */
+.wdl-string { font-weight: 600; letter-spacing: 3px; }
+.wdl-string .hit, .wdl-string .miss { font-weight: 700; }
 
 /* ---------- 奖励一览 ---------- */
 .reward-list { margin-top: 10px; }
@@ -238,9 +236,7 @@ code.kbd { background: #eceef1; border-radius: 6px; padding: 1px 7px; font-size:
   .card { padding: 16px; }
   .wdl-all-row { flex-wrap: wrap; }
   .wdl-all-row .seg { flex: 1 0 100%; }
-  .wdl-other { margin-left: 8px; }
-  .wdl-other > summary { flex-wrap: wrap; }
-  .wdl-other .other-line { margin-left: 8px; }
+  .wdl-string { letter-spacing: 2px; }
   table { white-space: nowrap; }
 }
 
