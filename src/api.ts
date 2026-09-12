@@ -8,7 +8,7 @@ import {
   rateLimit, mirrorTourUser, requirePwChanged,
 } from './_lib/auth.ts';
 import { sha256Hex, tourHashPassword, tourVerifyPassword } from './_lib/tourcrypto.ts';
-import { computeSettlement, type ResultInput } from './_lib/judge.ts';
+import { computeSettlement, wdlOf, type ResultInput } from './_lib/judge.ts';
 import { dispatchPending, signAndFetch } from './_lib/sync.ts';
 import { buildReportText } from './_lib/report.ts';
 import { enqueueOpenNotice, sendDueReminders } from './_lib/notify.ts';
@@ -393,7 +393,7 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
             WHERE i.event_id = ?`,
         ).bind(event.id).first(),
         needSettle
-          ? env.DB.prepare('SELECT detail_json, total_amount FROM settlement WHERE event_id = ?').bind(event.id).first()
+          ? env.DB.prepare('SELECT detail_json, total_amount, result_json FROM settlement WHERE event_id = ?').bind(event.id).first()
           : Promise.resolve(null as any),
         env.DB.prepare(
           `SELECT p.play_item_id, p.user_id, p.content_json, u.display_name, u.username
@@ -409,10 +409,14 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
       // 填预测时先让玩家看见能拿多少：各玩法项最高档之和
       event.maxScore = maxRewardOf(items, matches.length);
       let detail: any[] | null = null;
+      let actualByMatch: Map<number, { home: number; away: number }> | null = null;
       if (st) {
         detail = JSON.parse(st.detail_json);
         event.myResult = detail!.find((d: any) => d.user_id === user.id) || { total: 0, items: [] };
         event.totalAmount = st.total_amount;
+        // 实际比分只存在结算表里；「大家的答案」的紧凑串要逐场标命中，就得在这儿重算
+        const rj = JSON.parse(st.result_json);
+        actualByMatch = new Map((rj.results || []).map((r: any) => [r.matchId, { home: r.home, away: r.away }]));
       }
       const allPreds = allPredsR.results as any[];
       const byUser = new Map<number, { name: string; items: Record<number, any> }>();
@@ -432,13 +436,31 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
             return [i.itemId, i.hit && m ? Number(m[1]) : 0];
           }),
       );
+      // 每场命中与否（紧凑串标色用）：判法与结算同源（wdlOf），只给「有 pick 且该场有比分」的场
+      const matchHitsOf = (userItems: Record<number, any>) => {
+        const out: Record<number, Record<number, boolean>> = {};
+        if (!actualByMatch) return out;
+        for (const item of items) {
+          if (!crossIds.has(item.id)) continue;
+          const picks = userItems[item.id];
+          if (!picks || typeof picks !== 'object') continue;
+          const per: Record<number, boolean> = {};
+          for (const m of matches) {
+            const pick = picks[m.id];
+            const actual = actualByMatch.get(m.id);
+            if (pick && actual) per[m.id] = pick === wdlOf(actual.home, actual.away);
+          }
+          if (Object.keys(per).length) out[item.id] = per;
+        }
+        return out;
+      };
       const others = [...byUser.entries()].map(([uid, o]) => {
         const row = detail?.find((d: any) => d.user_id === uid);
         if (!row) return { name: o.name, items: o.items };
         const hits = Object.fromEntries(
           (row.items || []).filter((i: any) => i.hit).map((i: any) => [i.itemId, i.reward]),
         );
-        return { name: o.name, items: o.items, total: row.total, hits, hitCounts: hitCountsOf(row) };
+        return { name: o.name, items: o.items, total: row.total, hits, hitCounts: hitCountsOf(row), matchHits: matchHitsOf(o.items) };
       });
       return json({
         event, matches, items, others, form: formOf(items),
