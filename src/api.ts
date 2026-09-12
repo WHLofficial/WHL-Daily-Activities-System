@@ -134,11 +134,20 @@ async function maxScoreMap(env: any, ids: number[]): Promise<Map<number, number>
 
 // ---- 路由 ----
 
-export async function handleApi(ctx: { request: Request; env: any }): Promise<Response> {
-  const { request, env } = ctx;
+export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (p: Promise<any>) => void }): Promise<Response> {
+  const { request, env, waitUntil } = ctx;
   const url = new URL(request.url);
   const seg = url.pathname.replace(/^\/api\/?/, '').split('/').filter(Boolean);
   const method = request.method;
+
+  // 发放同步（最长 10 秒/笔的外部 HTTP）转后台：线上 Worker 有 waitUntil 就丢给运行时
+  // 续跑、响应立即返回；没有 waitUntil 的调用环境保持原样同步等完。claim_at 认领锁
+  // 保证它与 cron、手动重试并发时同一笔只放一方进 HTTP。
+  const dispatchAsync = (batchId?: number): Promise<any> | null => {
+    const p = dispatchPending(env, batchId);
+    if (waitUntil) { waitUntil(p); return null; }
+    return p;
+  };
 
   try {
     if (!env.SYNC_SECRET && (seg[0] === 'bind' || seg[0] === 'reports' || seg[0] === 'internal')) {
@@ -739,9 +748,9 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
         const replyExisting = async (bid: number) => {
           const n = (await env.DB.prepare('SELECT COUNT(*) AS n FROM payout_item WHERE batch_id = ?')
             .bind(bid).first()) as any;
-          const dispatch = await dispatchPending(env, bid);
+          const dispatch = await dispatchAsync(bid);
           return json({
-            ok: true, alreadyConfirmed: true, batchId: bid,
+            ok: true, alreadyConfirmed: true, batchId: bid, background: !dispatch,
             payoutCount: Number(n?.n || 0), unbound: [], dispatch,
           });
         };
@@ -832,8 +841,8 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
         stmts.push(env.DB.prepare(`UPDATE event SET status = 'paid' WHERE id = ?`).bind(eventId));
         await env.DB.batch(stmts);
 
-        const summary = await dispatchPending(env, batchId);
-        return json({ ok: true, batchId, payoutCount: payable.length, unbound, dispatch: summary, report: reportText });
+        const summary = await dispatchAsync(batchId);
+        return json({ ok: true, batchId, payoutCount: payable.length, unbound, dispatch: summary, background: !summary, report: reportText });
       }
 
       // ---- 批次/发放项 ----
@@ -856,8 +865,8 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
           `UPDATE payout_item SET status = 'pending', retry_count = 0, next_retry_at = NULL, claim_at = NULL
              WHERE batch_id = ? AND status IN ('pending', 'failed', 'exhausted')`,
         ).bind(batchId).run();
-        const summary = await dispatchPending(env, batchId);
-        return json({ ok: true, dispatch: summary });
+        const summary = await dispatchAsync(batchId);
+        return json({ ok: true, dispatch: summary, background: !summary });
       }
 
       if (method === 'POST' && seg[1] === 'payouts' && seg[3] === 'reverse') {
@@ -880,8 +889,8 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
           ).bind(reversalId, item.user_id, item.qq_id, -item.amount, item.event_id),
           env.DB.prepare(`UPDATE payout_item SET status = 'reversed' WHERE id = ?`).bind(item.id),
         ]);
-        const summary = await dispatchPending(env, item.batch_id);
-        return json({ ok: true, reversalId, dispatch: summary });
+        const summary = await dispatchAsync(item.batch_id);
+        return json({ ok: true, reversalId, dispatch: summary, background: !summary });
       }
 
       if (method === 'GET' && seg[1] === 'recon') {

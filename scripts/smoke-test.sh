@@ -212,24 +212,42 @@ node -e '
   assert(!(pFun in o.hits), "sm2 的趣味题未命中，不进 hits");
 ' "$P_SCORE" "$P_WDL" "$P_FUN"
 
-say "7. 确认发奖（SYNC_BASE_URL 指向 mock → 直接 credited；不可达时则 unknown 进重试队列）"
-curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID/confirm" -H 'Content-Type: application/json' -d '{"overrideCap":false}'; echo
+wait_batch() { # 确认发奖的同步已转后台执行，这里轮询批次直到全部到终态（本地 mock 下亚秒级）
+  local bid="$1" s=""
+  for i in $(seq 1 30); do
+    s=$(curl -sf -b "$J" "$BASE/api/admin/batches/$bid" | node -e "
+      let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{
+        const b=JSON.parse(s);
+        console.log(b.items.every(i=>['credited','reversed','exhausted'].includes(i.status))?'done':b.items.map(i=>i.status).join('/'));
+      })")
+    [ "$s" = "done" ] && { ok "批次 #$bid 全部到终态（第 $i 次轮询）"; return 0; }
+    sleep 0.5
+  done
+  echo "  ✗ 批次 #$bid 未在 15 秒内到账（$s）"; exit 1
+}
+
+say "7. 确认发奖（SYNC_BASE_URL 指向 mock → 直接 credited；不可达时则 unknown 进重试队列；同步在后台跑，响应立即返回）"
+CONFIRM1=$(curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID/confirm" -H 'Content-Type: application/json' -d '{"overrideCap":false}')
+echo "$CONFIRM1"
 
 say "7b. 重复确认发奖（幂等：第二次走 alreadyConfirmed，不新建批次）"
 SECOND=$(curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID/confirm" -H 'Content-Type: application/json' -d '{"overrideCap":false}')
 echo "$SECOND"
 BID=$(curl -sf -b "$J" "$BASE/api/admin/events/$EID" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log((JSON.parse(s).batch||{}).id))")
+wait_batch "$BID"
 curl -sf -b "$J" "$BASE/api/admin/batches/$BID" > "$SMOKE_TMP"/whl-batch.json
 node -e '
   const fs = require("fs");
-  const second = JSON.parse(process.argv[1]);
+  const first = JSON.parse(process.argv[1]);
+  const second = JSON.parse(process.argv[2]);
   const b = JSON.parse(fs.readFileSync(process.env.SMOKE_TMP + "/whl-batch.json", "utf8"));
   const assert = (cond, msg) => { if (!cond) { console.error("  ✗ " + msg); process.exit(1); } console.log("  ✓ " + msg); };
+  assert(first.background === true && first.dispatch === null, "确认发奖立即返回（background=true，同步转后台）");
   assert(second.alreadyConfirmed === true, "第二次确认返回 alreadyConfirmed");
   assert(Number(second.batchId) === Number(b.batch.id), `两次确认指向同一批次 #${b.batch.id}`);
   assert(b.items.length === 2, `批次仍是 2 笔（未重复建项，实得 ${b.items.length}）`);
   assert(b.items.every(i => i.status === "credited"), `2 笔均到账（实得 ${b.items.map(i => i.status).join("/")}）`);
-' "$SECOND"
+' "$CONFIRM1" "$SECOND"
 
 say "8. cron 重试通道"
 curl -sf -X POST "$BASE/api/internal/retry" -H "X-Cron-Key: $CRON"; echo
@@ -278,6 +296,7 @@ curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID2/confirm" -H 'Content-Type
 curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID2/confirm" -H 'Content-Type: application/json' -d '{"overrideCap":false}' > "$SMOKE_TMP"/whl-c2.json &
 wait
 BID2=$(curl -sf -b "$J" "$BASE/api/admin/events/$EID2" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log((JSON.parse(s).batch||{}).id))")
+wait_batch "$BID2"
 curl -sf -b "$J" "$BASE/api/admin/batches/$BID2" > "$SMOKE_TMP"/whl-batch2.json
 node -e '
   const fs = require("fs");

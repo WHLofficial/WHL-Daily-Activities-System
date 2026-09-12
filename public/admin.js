@@ -330,15 +330,24 @@ async function renderManage(id) {
 }
 
 // ---------- 发放批次（管理页内嵌 / 独立视图共用） ----------
+// 批次同步已转后台执行（响应立即返回），有未到账项时面板每 4 秒自动重拉；
+// 定时器挂在模块级：每次 route 离开本视图、或面板重渲时清掉，防泄漏。
+let batchTimer = null;
+function stopBatchTimer() {
+  if (batchTimer) { clearInterval(batchTimer); batchTimer = null; }
+}
+const PAYOUT_TERMINAL = ['credited', 'reversed'];
+
 async function showBatchInto(container, batchId) {
   const { batch, items } = await api(`/admin/batches/${batchId}`);
+  const refreshing = items.some((i) => !PAYOUT_TERMINAL.includes(i.status) && i.status !== 'exhausted');
   container.innerHTML = `
     <div class="card">
       <div class="row spread">
         <h3>发放批次 #${batch.id}</h3>
         ${statusPill(BATCH_STATUS, batch.status)}
       </div>
-      <div class="muted">共 ${batch.total_amount} 分 · 创建于 ${fmtTime(batch.created_at)}</div>
+      <div class="muted">共 ${batch.total_amount} 分 · 创建于 ${fmtTime(batch.created_at)}${refreshing ? ' · 积分正在后台同步，进度自动刷新' : ''}</div>
       <div class="row mt-s"><button class="ghost small" id="retry">重试未到账与失败项</button></div>
       <div class="table-wrap mt-s">
       <table>
@@ -354,10 +363,13 @@ async function showBatchInto(container, batchId) {
       </table>
       </div>
     </div>`;
+  stopBatchTimer();
+  if (refreshing) batchTimer = setInterval(() => showBatchInto(container, batchId), 4000);
   container.querySelector('#retry').onclick = async () => {
     try {
       const r = await api(`/admin/batches/${batchId}/retry`, { method: 'POST' });
-      toast(`重试完成：到账 ${r.dispatch.credited + r.dispatch.duplicate} 笔，待重试 ${r.dispatch.unknown} 笔，失败 ${r.dispatch.failed} 笔`);
+      toast(r.background ? '已发起重试，积分同步在后台进行' :
+        `重试完成：到账 ${r.dispatch.credited + r.dispatch.duplicate} 笔，待重试 ${r.dispatch.unknown} 笔，失败 ${r.dispatch.failed} 笔`);
       showBatchInto(container, batchId);
     } catch (e) { toast(e.message, true); }
   };
@@ -463,8 +475,12 @@ async function doConfirm(d, overrideCap) {
   try {
     const r = await api(`/admin/events/${d.event.id}/confirm`, { method: 'POST', body: { overrideCap } });
     if (r.skipped) toast('本次无人命中，没有积分需要发放');
-    else if (r.alreadyConfirmed) toast(`这笔竞猜已发过奖（批次 #${r.batchId}）：本次补发到账 ${r.dispatch.credited} 笔`);
-    else toast(`发奖批次已创建：${r.payoutCount} 人，已到账 ${r.dispatch.credited} 笔，待重试 ${r.dispatch.unknown} 笔，失败 ${r.dispatch.failed} 笔`);
+    else if (r.alreadyConfirmed) toast(r.background ?
+      `这笔竞猜已发过奖（批次 #${r.batchId}）：积分同步已转后台补发` :
+      `这笔竞猜已发过奖（批次 #${r.batchId}）：本次补发到账 ${r.dispatch.credited} 笔`);
+    else toast(r.background ?
+      `发奖批次已创建：${r.payoutCount} 人，积分正在后台到账，可在下方批次进度查看` :
+      `发奖批次已创建：${r.payoutCount} 人，已到账 ${r.dispatch.credited} 笔，待重试 ${r.dispatch.unknown} 笔，失败 ${r.dispatch.failed} 笔`);
     if (r.unbound?.length) toast(`未绑定 QQ，未发奖：${r.unbound.join('、')}`, true);
     renderManage(d.event.id);
   } catch (e) {
@@ -560,6 +576,7 @@ document.getElementById('tab-recon').onclick = () => switchTab('recon');
 
 window.addEventListener('hashchange', route);
 function route() {
+  stopBatchTimer();
   renderTopbar();
   renderTabs();
   if (!me?.user) { renderLogin(); return; }

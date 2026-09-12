@@ -8,10 +8,11 @@ import { sendDueReminders } from './_lib/notify';
 import { sealExpiredEvents } from './_lib/seal';
 
 export default {
-  async fetch(request: Request, env: any): Promise<Response> {
+  async fetch(request: Request, env: any, ctx: any): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
-      return handleApi({ request, env });
+      // waitUntil 透传给 API 层：发奖同步这类慢外呼转后台跑，响应立即返回
+      return handleApi({ request, env, waitUntil: (p: Promise<any>) => ctx.waitUntil(p) });
     }
     return env.ASSETS.fetch(request);
   },
