@@ -12,6 +12,7 @@ import { computeSettlement, type ResultInput } from './_lib/judge.ts';
 import { dispatchPending, signAndFetch } from './_lib/sync.ts';
 import { buildReportText } from './_lib/report.ts';
 import { enqueueOpenNotice, sendDueReminders } from './_lib/notify.ts';
+import { sealExpiredEvents } from './_lib/seal.ts';
 import { maxRewardOf } from './_lib/reward.ts';
 
 function uuid(): string {
@@ -909,6 +910,12 @@ export async function handleApi(ctx: { request: Request; env: any }): Promise<Re
       await assertCronKey(env, request);
       const ahead = Number(url.searchParams.get('ahead'));
       return json(await sendDueReminders(env, ahead > 0 ? ahead * 60_000 : undefined));
+    }
+
+    // 到点自动截止：cron 每 5 分钟走这里；也给运维留一个手动补扫口
+    if (method === 'POST' && seg[0] === 'internal' && seg[1] === 'seal') {
+      await assertCronKey(env, request);
+      return json({ sealed: await sealExpiredEvents(env) });
     }
 
     throw new HttpError(404, '未知接口');

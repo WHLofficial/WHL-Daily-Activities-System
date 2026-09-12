@@ -5,6 +5,7 @@
 import { handleApi, runRecon } from './api';
 import { dispatchPending } from './_lib/sync';
 import { sendDueReminders } from './_lib/notify';
+import { sealExpiredEvents } from './_lib/seal';
 
 export default {
   async fetch(request: Request, env: any): Promise<Response> {
@@ -17,9 +18,11 @@ export default {
 
   async scheduled(event: any, env: any) {
     if (event.cron === '*/5 * * * *') {
+      // 先把到点的单子封盘，提醒扫描就不用每轮把过期 open 单扫出来再丢掉
+      const seal = await sealExpiredEvents(env);
       const s = await dispatchPending(env);
       const rem = await sendDueReminders(env);
-      console.log('[cron] retry:', JSON.stringify(s), 'remind:', JSON.stringify(rem));
+      console.log('[cron] seal:', seal, 'retry:', JSON.stringify(s), 'remind:', JSON.stringify(rem));
     } else if (event.cron === '0 9 * * *') {
       const r = await runRecon(env);
       console.log('[cron] recon:', JSON.stringify(r));

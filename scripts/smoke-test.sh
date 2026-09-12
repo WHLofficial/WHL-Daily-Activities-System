@@ -8,7 +8,7 @@
 #      # 步 16 用的「被管理员重置密码」账号（reset-local.sh 也会自动预置）
 #      npx wrangler d1 execute whl --local --command "INSERT OR REPLACE INTO user (name,password_hash,role,locked,must_change_pw) VALUES ('sm4','$(node scripts/gen-tour-hash.mjs pass4444)','coach',0,1)"
 #   c) dev 服务已起（npx wrangler dev --port 8789，.dev.vars 提供测试密钥）
-# 验证：播种→注册（自动登录）→验密登录→开放竞猜→HMAC 绑定→提交预测→截止→录结果→结算→确认发奖（发往不可达地址→unknown）→cron 重试→对账→强制改密→开放通知与截止提醒
+# 验证：播种→注册（自动登录）→验密登录→开放竞猜→HMAC 绑定→提交预测→截止→录结果→结算→确认发奖（发往不可达地址→unknown）→cron 重试→对账→强制改密→开放通知与截止提醒→到点自动截止
 set -e
 BASE="http://127.0.0.1:8789"
 SECRET="${SYNC_SECRET:-testsecret}"
@@ -613,6 +613,32 @@ node -e '
   assert(j(stateB)[0].reminded_at !== null, "短窗局的提醒标记在开放时即填上（护栏）");
   assert(j(r3).sent === 0, `短窗局扫描时不重复发（实得 sent=${j(r3).sent}）`);
 ' "$ROWS7" "$STATE7" "$ROWS7B" "$R0" "$R1" "$R2" "$ROWS7C" "$STATE7B" "$R3"
+
+say "18. 到点自动截止（cron seal）：过期 open 单被扫成 sealed，两道提交闸门各拦一次"
+# 建单要求截止在未来，所以用「+2 秒后截止」：睡 3 秒让它过期，再触发扫描
+DL8=$(node -e "console.log(new Date(Date.now()+2e3).toISOString())")
+cat > "$SMOKE_TMP"/whl-autoseal.json <<JSON
+{"title": "自动截止验证局", "deadline": "$DL8", "rewardCap": 1000, "openNow": true,
+ "matches": [{"home": "戊队", "away": "己队", "items": [{"type": "wdl", "tiers": {"wdl": 50}}]}]}
+JSON
+EID8=$(curl -sf -b "$J" -X POST "$BASE/api/admin/events" -H 'Content-Type: application/json' -d @"$SMOKE_TMP"/whl-autoseal.json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).eventId))")
+ITEM8=$(curl -sf -b "$U1" "$BASE/api/events/$EID8" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).items[0].id))")
+sleep 3
+REJ1=$(curl -s -b "$U1" -X PUT "$BASE/api/events/$EID8/predictions" -H 'Content-Type: application/json' -d "{\"preds\":[{\"itemId\":$ITEM8,\"content\":\"home\"}]}")
+ok "status 未收敛时 deadline 闸门先拦：$REJ1"
+SEAL8=$(curl -sf -X POST "$BASE/api/internal/seal" -H "X-Cron-Key: $CRON")
+ok "触发自动截止扫描：$SEAL8"
+ST8=$(d1q "SELECT status FROM event WHERE id = $EID8")
+REJ2=$(curl -s -b "$U1" -X PUT "$BASE/api/events/$EID8/predictions" -H 'Content-Type: application/json' -d "{\"preds\":[{\"itemId\":$ITEM8,\"content\":\"home\"}]}")
+REM8=$(curl -sf -X POST "$BASE/api/internal/remind" -H "X-Cron-Key: $CRON")
+node -e '
+  const [st, rej1, rej2, rem] = process.argv.slice(1);
+  const assert = (c, m) => { if (!c) { console.error("  ✗ " + m); process.exit(1); } console.log("  ✓ " + m); };
+  assert(JSON.parse(st)[0].status === "sealed", `过期 open 单被置为 sealed（实得 ${st}）`);
+  assert(rej1.includes("已过提交截止时间"), "status 未收敛时 deadline 闸门也拦得住");
+  assert(rej2.includes("本次竞猜不在提交时段"), "sealed 后走 status 闸门");
+  assert(JSON.parse(rem).scanned === 0, `已截止单不再进提醒扫描（实得 ${rem}）`);
+' "$ST8" "$REJ1" "$REJ2" "$REM8"
 
 echo
 echo "✅ 冒烟测试跑完，请人工核对上方各步骤返回与期望值"
