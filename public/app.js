@@ -1,6 +1,6 @@
 // 用户端 SPA（无框架，hash 路由）：#/ 竞猜列表 · #/event/:id 详情 · #/bind 绑定 QQ · #/password 改密码
 import {
-  api, fmtTime, countdown, STATUS_LABEL, STATUS_CLASS, esc, toast,
+  api, withBusy, fmtTime, countdown, STATUS_LABEL, STATUS_CLASS, esc, toast,
   TYPE_NAME, TIER_LABEL, WDL_NAME, formatContent, roleLabel, PASSWORD_FORM, wirePassword, initTopbar,
 } from './core.js';
 
@@ -297,7 +297,8 @@ async function renderDetail(id) {
       predictions.push({ playItemId: itemId, content });
     }
     try {
-      await api(`/events/${id}/predictions`, { method: 'PUT', body: { predictions } });
+      // busy 挂在 api 调用上：提交期间按钮禁用防双击，弱网 15 秒超时有明确提示
+      await withBusy(btn, () => api(`/events/${id}/predictions`, { method: 'PUT', body: { predictions } }));
       toast('提交成功，截止前可以随时修改');
       renderDetail(id);
     } catch (e2) {
@@ -314,8 +315,10 @@ const num = (el) => {
 };
 
 // ---------- 绑定 QQ ----------
+// 绑定状态直接用启动时缓存的 me.binding，不再每次进页都拉一遍 /me；
+// 绑没绑上由用户点「刷新状态」确认（机器人绑定是站外动作，自动轮询意义不大）
 async function renderBind() {
-  const { binding } = await api('/me');
+  const binding = me?.binding;
   if (binding) {
     app.innerHTML = `
       <div class="card">
@@ -331,16 +334,22 @@ async function renderBind() {
       <p class="muted">绑定后，竞猜积分才能自动发到你的 QQ 上。一个绑定码只能用一次，10 分钟内有效。</p>
       <div class="row"><button class="grow" id="gen">获取绑定码</button></div>
       <div id="code-box"></div>
+      <div class="row mt-s"><button class="ghost small" id="bind-refresh">绑定好了？刷新状态</button></div>
     </div>`;
-  document.getElementById('gen').onclick = async () => {
+  const gen = document.getElementById('gen');
+  gen.onclick = async () => {
     try {
-      const { code } = await api('/bind/new', { method: 'POST' });
+      const { code } = await withBusy(gen, () => api('/bind/new', { method: 'POST' }));
       document.getElementById('code-box').innerHTML = `
         <div class="bigcode">${esc(code)}</div>
         <p>在 QQ 群里发送：</p>
         <p class="center"><code class="kbd">绑定 ${esc(code)}</code></p>
         <p class="muted">机器人回复确认即绑定成功。</p>`;
     } catch (e) { toast(e.message, true); }
+  };
+  document.getElementById('bind-refresh').onclick = async () => {
+    await loadMe();
+    renderBind();
   };
 }
 

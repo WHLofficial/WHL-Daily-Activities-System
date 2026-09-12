@@ -1,12 +1,26 @@
 // 前端共享工具：API 封装、时间格式化、提示、HTML 转义
 
+// 弱网下请求可能永远 pending，按钮又没有反馈，就成了「点了没反应」。15 秒兜底（对齐赛事系统）。
+const API_TIMEOUT_MS = 15000;
+
 export async function api(path, { method = 'GET', body } = {}) {
-  const res = await fetch('/api' + path, {
-    method,
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-    credentials: 'same-origin',
-  });
+  let res;
+  try {
+    res = await fetch('/api' + path, {
+      method,
+      headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      credentials: 'same-origin',
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    });
+  } catch (e) {
+    if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
+      const err = new Error('网络超时，请重试');
+      err.code = 'timeout';
+      throw err;
+    }
+    throw e;
+  }
   let data = {};
   try { data = await res.json(); } catch { /* 空响应 */ }
   if (!res.ok) {
@@ -16,6 +30,22 @@ export async function api(path, { method = 'GET', body } = {}) {
     throw err;
   }
   return data;
+}
+
+// 写操作按钮统一挂 busy：禁用 + 「处理中…」，完成后还原；顺带挡掉双击重复提交。
+// fn 里通常会重渲页面把按钮换掉，还原一个已脱离 DOM 的节点无害。
+export async function withBusy(btn, fn) {
+  if (!btn) return fn();
+  if (btn.disabled) return;
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '处理中…';
+  try {
+    return await fn();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
 }
 
 export function fmtTime(iso) {

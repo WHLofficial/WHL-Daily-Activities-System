@@ -1,6 +1,6 @@
 // 管理端 SPA：新建竞猜 / 状态流转 / 录结果 / 结算预览 / 确认发奖 / 批次状态 / 冲正 / 对账
 import {
-  api, fmtTime, countdown, STATUS_LABEL, STATUS_CLASS, esc, toast,
+  api, withBusy, fmtTime, countdown, STATUS_LABEL, STATUS_CLASS, esc, toast,
   TYPE_NAME, TIER_LABEL, CREATE_TYPES, ROLE_NAME, formatContent, roleLabel,
   BATCH_STATUS, PAYOUT_STATUS, statusPill, PASSWORD_FORM, wirePassword, initTopbar,
 } from './core.js';
@@ -70,7 +70,7 @@ async function renderEvents() {
       initBox.querySelectorAll('[data-init]').forEach((btn) => {
         btn.onclick = async () => {
           try {
-            await api('/admin/initiators', { method: 'POST', body: { userId: Number(btn.dataset.init), on: btn.dataset.on === '1' } });
+            await withBusy(btn, () => api('/admin/initiators', { method: 'POST', body: { userId: Number(btn.dataset.init), on: btn.dataset.on === '1' } }));
             toast('发起人名单已更新');
             renderEvents();
           } catch (e) { toast(e.message, true); }
@@ -257,7 +257,7 @@ async function renderNew() {
       },
     } : null;
     try {
-      const r = await api('/admin/events', {
+      const r = await withBusy(document.getElementById('create'), () => api('/admin/events', {
         method: 'POST',
         body: {
           form: pure ? 'pure' : 'items',
@@ -268,7 +268,7 @@ async function renderNew() {
           matches,
           cross,
         },
-      });
+      }));
       toast(`已创建竞猜 #${r.eventId}`);
       location.hash = `#/manage/${r.eventId}`;
     } catch (e) { toast(e.message, true); }
@@ -314,12 +314,12 @@ async function renderManage(id) {
       const act = b.dataset.act;
       try {
         if (['open', 'seal', 'archive'].includes(act)) {
-          await api(`/admin/events/${id}/${act}`, { method: 'POST' });
+          await withBusy(b, () => api(`/admin/events/${id}/${act}`, { method: 'POST' }));
           toast('状态已更新'); renderManage(id);
         } else if (act === 'result') {
           renderResultEntry(d);
         } else if (act === 'confirm') {
-          doConfirm(d, false);
+          doConfirm(d, false, b);
         }
       } catch (e2) { toast(e2.message, true); }
     };
@@ -365,9 +365,10 @@ async function showBatchInto(container, batchId) {
     </div>`;
   stopBatchTimer();
   if (refreshing) batchTimer = setInterval(() => showBatchInto(container, batchId), 4000);
-  container.querySelector('#retry').onclick = async () => {
+  const retryBtn = container.querySelector('#retry');
+  retryBtn.onclick = async () => {
     try {
-      const r = await api(`/admin/batches/${batchId}/retry`, { method: 'POST' });
+      const r = await withBusy(retryBtn, () => api(`/admin/batches/${batchId}/retry`, { method: 'POST' }));
       toast(r.background ? '已发起重试，积分同步在后台进行' :
         `重试完成：到账 ${r.dispatch.credited + r.dispatch.duplicate} 笔，待重试 ${r.dispatch.unknown} 笔，失败 ${r.dispatch.failed} 笔`);
       showBatchInto(container, batchId);
@@ -377,7 +378,7 @@ async function showBatchInto(container, batchId) {
     b.onclick = async () => {
       if (!confirm('确认冲正这笔发放？会向该 QQ 发一笔等额反向流水。')) return;
       try {
-        await api(`/admin/payouts/${b.dataset.rev}/reverse`, { method: 'POST' });
+        await withBusy(b, () => api(`/admin/payouts/${b.dataset.rev}/reverse`, { method: 'POST' }));
         toast('冲正已提交');
         showBatchInto(container, batchId);
       } catch (e) { toast(e.message, true); }
@@ -428,7 +429,8 @@ async function renderResultEntry(d) {
         itemId: Number(box.dataset.fun),
         hits: [...box.querySelectorAll('input:checked')].map((c) => Number(c.dataset.uid)),
       }));
-      const r = await api(`/admin/events/${d.event.id}/result`, { method: 'POST', body: { results, fun } });
+      const r = await withBusy(document.getElementById('calc'), () =>
+        api(`/admin/events/${d.event.id}/result`, { method: 'POST', body: { results, fun } }));
       toast(`结算完成：${r.players} 人命中，共 ${r.total} 分`);
       if (r.breaches?.length) toast(`${r.breaches.length} 个玩法项超出上限`, true);
       renderManage(d.event.id);
@@ -468,12 +470,13 @@ async function renderSettlementPreview(d, withConfirm) {
         <div class="row mt"><button class="grow" id="do-confirm">${noHit ? '确认结案（无人命中）' : '确认发奖（生成批次并同步积分）'}</button></div>` : ''}
     </div>`;
   const btn = document.getElementById('do-confirm');
-  if (btn) btn.onclick = () => doConfirm(d, document.getElementById('ov').checked);
+  if (btn) btn.onclick = () => doConfirm(d, document.getElementById('ov').checked, btn);
 }
 
-async function doConfirm(d, overrideCap) {
+async function doConfirm(d, overrideCap, btn) {
   try {
-    const r = await api(`/admin/events/${d.event.id}/confirm`, { method: 'POST', body: { overrideCap } });
+    const r = await withBusy(btn, () =>
+      api(`/admin/events/${d.event.id}/confirm`, { method: 'POST', body: { overrideCap } }));
     if (r.skipped) toast('本次无人命中，没有积分需要发放');
     else if (r.alreadyConfirmed) toast(r.background ?
       `这笔竞猜已发过奖（批次 #${r.batchId}）：积分同步已转后台补发` :
