@@ -291,8 +291,9 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
     if (method === 'POST' && seg[0] === 'login') {
       if (!env.TOUR_DB) throw new HttpError(500, '未配置赛事库');
       const ip = request.headers.get('CF-Connecting-IP') || 'local';
-      if (!(await rateLimit(env, `login-ip:${ip}`, 10, 900))) throw new HttpError(429, '尝试太频繁，请 15 分钟后再来');
-      const body = await readBody(request);
+      // IP 限流与请求体解析并行；账号限流要等 body 里的用户名，只能串在其后
+      const [ipOk, body] = await Promise.all([rateLimit(env, `login-ip:${ip}`, 10, 900), readBody(request)]);
+      if (!ipOk) throw new HttpError(429, '尝试太频繁，请 15 分钟后再来');
       const name = String(body.username ?? '').trim();
       if (!name) throw new HttpError(400, '请输入昵称');
       if (!(await rateLimit(env, `login-name:${name}`, 5, 900))) throw new HttpError(429, '这个账号尝试太频繁，请 15 分钟后再来');
@@ -320,9 +321,11 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
     if (method === 'GET' && seg[0] === 'me') {
       const user = await getAuthUser(env, request);
       if (!user) return json({ user: null });
-      const binding = await env.DB.prepare('SELECT qq_id, bound_at FROM user_binding WHERE user_id = ?').bind(user.id).first();
-      // 发起人标记：role=user 但在发起人名单内，前端据此放行管理台
-      const isInit = user.role === 'admin' ? true : await isInitiator(env, user.id);
+      // 绑定信息与发起人标记互不依赖，并行查（/me 每次进站都要走）
+      const [binding, isInit] = await Promise.all([
+        env.DB.prepare('SELECT qq_id, bound_at FROM user_binding WHERE user_id = ?').bind(user.id).first(),
+        user.role === 'admin' ? Promise.resolve(true) : isInitiator(env, user.id),
+      ]) as any[];
       return json({ user, binding: binding || null, is_initiator: isInit, mustChangePassword: !!user.mustChangePw });
     }
 
@@ -342,18 +345,22 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
     // ---------- 竞猜（用户） ----------
     if (method === 'GET' && seg[0] === 'events' && seg.length === 1) {
       const user = await requireUser(env, request);
-      const events = (await env.DB.prepare(
-        `SELECT e.*, ${FORM_SQL}, (SELECT COUNT(DISTINCT p.user_id) FROM prediction p
-                        JOIN play_item i ON i.id = p.play_item_id
-                       WHERE i.event_id = e.id) AS participants
+      // 列表主查询与「我的提交数」互不依赖，一把并行
+      const [eventsR, mineR] = await Promise.all([
+        env.DB.prepare(
+          `SELECT e.*, ${FORM_SQL}, (SELECT COUNT(DISTINCT p.user_id) FROM prediction p
+                          JOIN play_item i ON i.id = p.play_item_id
+                         WHERE i.event_id = e.id) AS participants
            FROM event e WHERE e.status != 'draft' ORDER BY e.created_at DESC LIMIT 20`,
-      ).all()).results as any[];
-      const mine = await env.DB.prepare(
-        `SELECT i.event_id, COUNT(*) AS n FROM prediction p
-           JOIN play_item i ON i.id = p.play_item_id
-          WHERE p.user_id = ? GROUP BY i.event_id`,
-      ).bind(user.id).all();
-      const mineMap = new Map(mine.results.map((r: any) => [r.event_id, r.n]));
+        ).all(),
+        env.DB.prepare(
+          `SELECT i.event_id, COUNT(*) AS n FROM prediction p
+             JOIN play_item i ON i.id = p.play_item_id
+            WHERE p.user_id = ? GROUP BY i.event_id`,
+        ).bind(user.id).all(),
+      ]);
+      const events = eventsR.results as any[];
+      const mineMap = new Map((mineR.results as any[]).map((r: any) => [r.event_id, r.n]));
       const maxMap = await maxScoreMap(env, events.map((e: any) => e.id));
       return json({
         events: events.map((e) => ({
@@ -368,38 +375,46 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
         `SELECT * FROM event WHERE id = ? AND status != 'draft'`,
       ).bind(Number(seg[1])).first() as any;
       if (!event) throw new HttpError(404, '竞猜不存在');
-      const matches = (await env.DB.prepare('SELECT * FROM match WHERE event_id = ? ORDER BY id').bind(event.id).all()).results as any[];
-      const items = (await env.DB.prepare(
-        `SELECT * FROM play_item WHERE event_id = ? ORDER BY match_id IS NULL, match_id, sort, id`,
-      ).bind(event.id).all()).results as any[];
+      // event 本体要先判存在与状态，其余查询彼此无依赖，一把并行（原本 7 条全串行）
+      const needSettle = event.status === 'settled' || event.status === 'paid';
+      const [matchesR, itemsR, myPredsR, participantsRow, st, allPredsR] = await Promise.all([
+        env.DB.prepare('SELECT * FROM match WHERE event_id = ? ORDER BY id').bind(event.id).all(),
+        env.DB.prepare(
+          `SELECT * FROM play_item WHERE event_id = ? ORDER BY match_id IS NULL, match_id, sort, id`,
+        ).bind(event.id).all(),
+        env.DB.prepare(
+          `SELECT p.play_item_id, p.content_json FROM prediction p
+             JOIN play_item i ON i.id = p.play_item_id
+            WHERE i.event_id = ? AND p.user_id = ?`,
+        ).bind(event.id, user.id).all(),
+        env.DB.prepare(
+          `SELECT COUNT(DISTINCT p.user_id) AS n FROM prediction p
+             JOIN play_item i ON i.id = p.play_item_id
+            WHERE i.event_id = ?`,
+        ).bind(event.id).first(),
+        needSettle
+          ? env.DB.prepare('SELECT detail_json, total_amount FROM settlement WHERE event_id = ?').bind(event.id).first()
+          : Promise.resolve(null as any),
+        env.DB.prepare(
+          `SELECT p.play_item_id, p.user_id, p.content_json, u.display_name, u.username
+             FROM prediction p JOIN users u ON u.id = p.user_id
+             JOIN play_item i ON i.id = p.play_item_id
+            WHERE i.event_id = ? ORDER BY p.user_id, p.play_item_id`,
+        ).bind(event.id).all(),
+      ]);
+      const matches = matchesR.results as any[];
+      const items = itemsR.results as any[];
+      const myPreds = myPredsR.results as any[];
+      const participants = (participantsRow as any).n;
       // 填预测时先让玩家看见能拿多少：各玩法项最高档之和
       event.maxScore = maxRewardOf(items, matches.length);
-      const myPreds = (await env.DB.prepare(
-        `SELECT p.play_item_id, p.content_json FROM prediction p
-           JOIN play_item i ON i.id = p.play_item_id
-          WHERE i.event_id = ? AND p.user_id = ?`,
-      ).bind(event.id, user.id).all()).results as any[];
-      const participants = (await env.DB.prepare(
-        `SELECT COUNT(DISTINCT p.user_id) AS n FROM prediction p
-           JOIN play_item i ON i.id = p.play_item_id
-          WHERE i.event_id = ?`,
-      ).bind(event.id).first() as any).n;
       let detail: any[] | null = null;
-      if (event.status === 'settled' || event.status === 'paid') {
-        const st = await env.DB.prepare('SELECT detail_json, total_amount FROM settlement WHERE event_id = ?').bind(event.id).first() as any;
-        if (st) {
-          detail = JSON.parse(st.detail_json);
-          event.myResult = detail!.find((d: any) => d.user_id === user.id) || { total: 0, items: [] };
-          event.totalAmount = st.total_amount;
-        }
+      if (st) {
+        detail = JSON.parse(st.detail_json);
+        event.myResult = detail!.find((d: any) => d.user_id === user.id) || { total: 0, items: [] };
+        event.totalAmount = st.total_amount;
       }
-      // 大家的答案：只给昵称与答案，不带 QQ 与内部 id；结算后附命中档与得分。
-      const allPreds = (await env.DB.prepare(
-        `SELECT p.play_item_id, p.user_id, p.content_json, u.display_name, u.username
-           FROM prediction p JOIN users u ON u.id = p.user_id
-           JOIN play_item i ON i.id = p.play_item_id
-          WHERE i.event_id = ? ORDER BY p.user_id, p.play_item_id`,
-      ).bind(event.id).all()).results as any[];
+      const allPreds = allPredsR.results as any[];
       const byUser = new Map<number, { name: string; items: Record<number, any> }>();
       for (const p of allPreds) {
         if (p.user_id === user.id) continue;
@@ -641,25 +656,32 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
       if (isEventRoute && !event) throw new HttpError(404, '竞猜不存在');
 
       if (isEventRoute && method === 'GET' && seg.length === 3) {
-        const matches = (await env.DB.prepare('SELECT * FROM match WHERE event_id = ? ORDER BY id').bind(eventId).all()).results;
-        const items = (await env.DB.prepare(
-          `SELECT * FROM play_item WHERE event_id = ? ORDER BY match_id IS NULL, match_id, sort, id`,
-        ).bind(eventId).all()).results as any[];
-        const preds = (await env.DB.prepare(
-          `SELECT p.*, u.display_name FROM prediction p
-             JOIN play_item i ON i.id = p.play_item_id
-             JOIN users u ON u.id = p.user_id
-            WHERE i.event_id = ? ORDER BY u.id`,
-        ).bind(eventId).all()).results as any[];
-        const bindings = (await env.DB.prepare(
-          `SELECT DISTINCT p.user_id, b.qq_id FROM prediction p
-             JOIN play_item i ON i.id = p.play_item_id
-             LEFT JOIN user_binding b ON b.user_id = p.user_id
-            WHERE i.event_id = ?`,
-        ).bind(eventId).all()).results as any[];
+        // 六条查询互不依赖，一把并行（管理详情是操作前必经页面）
+        const [matchesR, itemsR, predsR, bindingsR, st, batch] = await Promise.all([
+          env.DB.prepare('SELECT * FROM match WHERE event_id = ? ORDER BY id').bind(eventId).all(),
+          env.DB.prepare(
+            `SELECT * FROM play_item WHERE event_id = ? ORDER BY match_id IS NULL, match_id, sort, id`,
+          ).bind(eventId).all(),
+          env.DB.prepare(
+            `SELECT p.*, u.display_name FROM prediction p
+               JOIN play_item i ON i.id = p.play_item_id
+               JOIN users u ON u.id = p.user_id
+              WHERE i.event_id = ? ORDER BY u.id`,
+          ).bind(eventId).all(),
+          env.DB.prepare(
+            `SELECT DISTINCT p.user_id, b.qq_id FROM prediction p
+               JOIN play_item i ON i.id = p.play_item_id
+               LEFT JOIN user_binding b ON b.user_id = p.user_id
+              WHERE i.event_id = ?`,
+          ).bind(eventId).all(),
+          env.DB.prepare('SELECT * FROM settlement WHERE event_id = ?').bind(eventId).first(),
+          env.DB.prepare('SELECT * FROM payout_batch WHERE event_id = ?').bind(eventId).first(),
+        ]) as any[];
+        const matches = matchesR.results;
+        const items = itemsR.results as any[];
+        const preds = predsR.results as any[];
+        const bindings = bindingsR.results as any[];
         const qqMap = new Map(bindings.map((b) => [b.user_id, b.qq_id]));
-        const st = await env.DB.prepare('SELECT * FROM settlement WHERE event_id = ?').bind(eventId).first() as any;
-        const batch = await env.DB.prepare('SELECT * FROM payout_batch WHERE event_id = ?').bind(eventId).first() as any;
         return json({
           event, matches, items, form: formOf(items),
           predictions: preds.map((p) => ({
