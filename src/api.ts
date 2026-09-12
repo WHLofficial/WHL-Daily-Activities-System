@@ -446,10 +446,13 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
       const stmts = [];
       // 猜胜负要覆盖全部场次，所以「场次齐全」在这里校验（那时还拿得到 event 的场次列表）
       let matchIds: number[] | null = null;
+      // 一次取全该竞猜的玩法项再按 id 映射：提交逐条循环，逐条 SELECT 是典型的 N+1
+      const items = (await env.DB.prepare(
+        `SELECT * FROM play_item WHERE event_id = ?`,
+      ).bind(event.id).all()).results as any[];
+      const itemById = new Map(items.map((i) => [i.id, i]));
       for (const p of preds) {
-        const item = await env.DB.prepare(
-          `SELECT * FROM play_item WHERE id = ? AND event_id = ?`,
-        ).bind(Number(p.playItemId), event.id).first() as any;
+        const item = itemById.get(Number(p.playItemId));
         if (!item) throw new HttpError(400, `玩法项 ${p.playItemId} 不属于本次竞猜`);
         const contentJson = validateContent(item.type, p.content);
         if (item.type === 'wdl_all') {
