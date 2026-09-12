@@ -314,6 +314,8 @@ async function renderManage(id) {
       const act = b.dataset.act;
       try {
         if (['open', 'seal', 'archive'].includes(act)) {
+          // 二次确认只加在会动他人提交资格的动作上（与赛事系统的状态流转同款）
+          if (act === 'seal' && !confirm('提前截止后所有人将无法再提交预测，确定提前截止吗？')) return;
           await withBusy(b, () => api(`/admin/events/${id}/${act}`, { method: 'POST' }));
           toast('状态已更新'); renderManage(id);
         } else if (act === 'result') {
@@ -429,6 +431,7 @@ async function renderResultEntry(d) {
         itemId: Number(box.dataset.fun),
         hits: [...box.querySelectorAll('input:checked')].map((c) => Number(c.dataset.uid)),
       }));
+      if (!confirm('确认按当前比分计算结算？结算后请先核对预览再发奖。')) return;
       const r = await withBusy(document.getElementById('calc'), () =>
         api(`/admin/events/${d.event.id}/result`, { method: 'POST', body: { results, fun } }));
       toast(`结算完成：${r.players} 人命中，共 ${r.total} 分`);
@@ -475,6 +478,9 @@ async function renderSettlementPreview(d, withConfirm) {
 
 async function doConfirm(d, overrideCap, btn) {
   try {
+    // 无人命中走结案、有人命中走发奖：文案分开，别让管理员在两种后果下点同一个「确定」
+    const noHit = !d.settlement?.total;
+    if (!confirm(noHit ? '确认结案？无人命中，本竞猜将直接结案。' : '确认发奖？积分将同步到对应 QQ，撤销需逐笔冲正。')) return;
     const r = await withBusy(btn, () =>
       api(`/admin/events/${d.event.id}/confirm`, { method: 'POST', body: { overrideCap } }));
     if (r.skipped) toast('本次无人命中，没有积分需要发放');
