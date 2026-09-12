@@ -8,7 +8,7 @@
 #      # 步 16 用的「被管理员重置密码」账号（reset-local.sh 也会自动预置）
 #      npx wrangler d1 execute whl --local --command "INSERT OR REPLACE INTO user (name,password_hash,role,locked,must_change_pw) VALUES ('sm4','$(node scripts/gen-tour-hash.mjs pass4444)','coach',0,1)"
 #   c) dev 服务已起（npx wrangler dev --port 8789，.dev.vars 提供测试密钥）
-# 验证：播种→注册（自动登录）→验密登录→开放竞猜→HMAC 绑定→提交预测→截止→录结果→结算→确认发奖（发往不可达地址→unknown）→cron 重试→对账→强制改密→开放通知与截止提醒→到点自动截止
+# 验证：播种→注册（自动登录）→验密登录→开放竞猜→HMAC 绑定→提交预测→截止→录结果→结算→确认发奖（发往不可达地址→unknown）→cron 重试→对账→强制改密→开放通知与截止提醒→到点自动截止→纯猜胜负与逐场命中（matchHits）
 set -e
 BASE="http://127.0.0.1:8789"
 SECRET="${SYNC_SECRET:-testsecret}"
@@ -157,7 +157,7 @@ node -e '
   assert(names[0] === "sm2", `看到的是 sm2（实得 ${names[0]}）`);
   assert(!names.includes("sm1"), "自己的答案不重复列出（页面上有自己的输入框）");
   assert(d.others[0].items[process.argv[1]] === "home", `sm2 的胜平负答案可见（实得 ${JSON.stringify(d.others[0].items)}）`);
-  assert(d.others[0].total === undefined && d.others[0].hits === undefined, "未结算时不带得分与命中字段");
+  assert(d.others[0].total === undefined && d.others[0].hits === undefined && d.others[0].matchHits === undefined, "未结算时不带得分、命中与逐场命中字段");
   assert(!fs.readFileSync(process.env.SMOKE_TMP + "/whl-others.json", "utf8").includes("10002"), "响应里不含他人 QQ 号");
 ' "$P_WDL"
 
@@ -660,4 +660,58 @@ node -e '
 ' "$ST8" "$REJ1" "$REJ2" "$REM8"
 
 echo
+say "19. 纯猜胜负 + matchHits（紧凑串标色的数据源：逐场命中与结算同口径）"
+DL9=$(node -e "console.log(new Date(Date.now()+3600e3).toISOString())")
+cat > "$SMOKE_TMP"/whl-pure.json <<JSON
+{"form": "pure", "title": "纯猜胜负紧凑串验证局", "deadline": "$DL9", "rewardCap": 1000, "openNow": true,
+ "matches": [{"home": "甲队", "away": "乙队", "items": []}, {"home": "丙队", "away": "丁队", "items": []}],
+ "cross": {"type": "wdl_all", "question": "猜胜负", "tiers": {"mode": "per_hit", "perHit": 10}}}
+JSON
+EID9=$(curl -sf -b "$J" -X POST "$BASE/api/admin/events" -H 'Content-Type: application/json' -d @"$SMOKE_TMP"/whl-pure.json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).eventId))")
+PURE=$(curl -sf -b "$U1" "$BASE/api/events/$EID9" | node -e "
+  let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const d=JSON.parse(s);console.log(d.items.find(i=>i.type==='wdl_all').id+' '+d.matches.map(m=>m.id).join(' '))})")
+CROSS9=$(echo "$PURE" | cut -d' ' -f1); M91=$(echo "$PURE" | cut -d' ' -f2); M92=$(echo "$PURE" | cut -d' ' -f3)
+ok "纯猜胜负竞猜 #$EID9 建好：跨场项 $CROSS9，场次 $M91/$M92"
+# 未结算：详情不应带 matchHits
+curl -sf -b "$U1" "$BASE/api/events/$EID9" > "$SMOKE_TMP"/whl-pure-pre.json
+node -e '
+  const fs = require("fs");
+  const d = JSON.parse(fs.readFileSync(process.env.SMOKE_TMP + "/whl-pure-pre.json", "utf8"));
+  const o = d.others[0] || {};
+  const assert = (c, m) => { if (!c) { console.error("  ✗ " + m); process.exit(1); } console.log("  ✓ " + m); };
+  assert(d.others.length === 0, "还没人提交时 others 为空");
+'
+# sm1 押 主胜+客胜；sm2 押 主胜+平。比分：第一场 2:1（主胜），第二场 0:0（平）
+curl -sf -b "$U1" -X PUT "$BASE/api/events/$EID9/predictions" -H 'Content-Type: application/json' \
+  -d "{\"predictions\":[{\"playItemId\":$CROSS9,\"content\":{\"$M91\":\"home\",\"$M92\":\"away\"}}]}" > /dev/null
+curl -sf -b "$U2" -X PUT "$BASE/api/events/$EID9/predictions" -H 'Content-Type: application/json' \
+  -d "{\"predictions\":[{\"playItemId\":$CROSS9,\"content\":{\"$M91\":\"home\",\"$M92\":\"draw\"}}]}" > /dev/null
+curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID9/seal" > /dev/null
+curl -sf -b "$J" -X POST "$BASE/api/admin/events/$EID9/result" -H 'Content-Type: application/json' \
+  -d "{\"results\":[{\"matchId\":$M91,\"home\":2,\"away\":1},{\"matchId\":$M92,\"home\":0,\"away\":0}],\"fun\":[]}" > /dev/null
+curl -sf -b "$U1" "$BASE/api/events/$EID9" > "$SMOKE_TMP"/whl-pure-settled.json
+node -e '
+  const fs = require("fs");
+  const d = JSON.parse(fs.readFileSync(process.env.SMOKE_TMP + "/whl-pure-settled.json", "utf8"));
+  const [cross, m1, m2] = process.argv.slice(1);
+  const assert = (c, m) => { if (!c) { console.error("  ✗ " + m); process.exit(1); } console.log("  ✓ " + m); };
+  const o = d.others[0];
+  assert(o.name === "sm2" && o.matchHits, "结算后 sm2 带 matchHits");
+  const mh = o.matchHits[cross] || {};
+  assert(mh[m1] === true && mh[m2] === true, `sm2 两场全中（实得 ${JSON.stringify(mh)}）`);
+  assert(o.hitCounts[cross] === 2 && Number(o.hits[cross]) === 20, `命中 2 场 +20（per_hit 10×2，实得 ${JSON.stringify(o.hits)}）`);
+' "$CROSS9" "$M91" "$M92"
+curl -sf -b "$U2" "$BASE/api/events/$EID9" > "$SMOKE_TMP"/whl-pure-settled2.json
+node -e '
+  const fs = require("fs");
+  const d = JSON.parse(fs.readFileSync(process.env.SMOKE_TMP + "/whl-pure-settled2.json", "utf8"));
+  const [cross, m1, m2] = process.argv.slice(1);
+  const assert = (c, m) => { if (!c) { console.error("  ✗ " + m); process.exit(1); } console.log("  ✓ " + m); };
+  const o = d.others[0];
+  assert(o.name === "sm1" && o.matchHits, "结算后 sm1 带 matchHits");
+  const mh = o.matchHits[cross] || {};
+  assert(mh[m1] === true && mh[m2] === false, `sm1 主胜命中、客胜未中（实得 ${JSON.stringify(mh)}）`);
+  assert(o.hitCounts[cross] === 1 && Number(o.hits[cross]) === 10, `命中 1 场 +10（实得 ${JSON.stringify(o.hits)}）`);
+' "$CROSS9" "$M91" "$M92"
+
 echo "✅ 冒烟测试跑完，请人工核对上方各步骤返回与期望值"
