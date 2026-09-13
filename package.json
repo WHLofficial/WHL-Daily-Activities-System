@@ -4,11 +4,17 @@
   "description": "WHL 竞猜系统 — CF Pages + Pages Functions + D1；发奖同步到 AstrBot 插件",
   "scripts": {
     "dev": "wrangler dev --port 8789",
+    "dev:oidc": "wrangler dev --port 8796 --var OIDC_ISSUER:http://127.0.0.1:8792 --var OIDC_CLIENT_ID:guess --var OIDC_REDIRECT_ORIGIN:http://127.0.0.1:8796",
+    "test": "vitest run",
     "deploy": "wrangler deploy",
     "db:migrate:local": "wrangler d1 migrations apply whl-guess --local",
     "db:migrate:remote": "wrangler d1 migrations apply whl-guess --remote"
   },
+  "dependencies": {
+    "jose": "^6.2.12"
+  },
   "devDependencies": {
+    "vitest": "^3.0.0",
     "wrangler": "^4.0.0"
   }
 }

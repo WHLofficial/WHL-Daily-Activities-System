@@ -14,6 +14,7 @@ import { buildReportText } from './_lib/report.ts';
 import { enqueueOpenNotice, sendDueReminders } from './_lib/notify.ts';
 import { sealExpiredEvents } from './_lib/seal.ts';
 import { maxRewardOf } from './_lib/reward.ts';
+import { handleOidc, isOidc, oidcSessionToken, clearOidcSessionCookie } from './_lib/oidc.ts';
 
 function uuid(): string {
   return crypto.randomUUID();
@@ -201,6 +202,12 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
       return json({ ok: true, acked: ids.length });
     }
 
+    // ---------- 统一认证（OIDC RP，迁移步骤②）----------
+    // 四端点自含（发起/回调/登出/back-channel），先于改密门分发：
+    // 被重置密码的用户也要能走完重新登录的跳转链
+    const oidcRes = await handleOidc(env, request, seg, method);
+    if (oidcRes) return oidcRes;
+
     // ---------- 认证 ----------
     // 被管理员重置过密码的账号（赛事库 must_change_pw=1）：除登录/注册/登出/改密/查看自身状态外
     // 一律拦下，前端据此把人引导到改密页（与赛事系统 worker/middleware/auth.ts 同规则）。
@@ -211,6 +218,8 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
     // 注册：账号真源在赛事系统 user 表（写入即全站通用），校验规则与赛事系统 /register 逐字一致。
     // 门槛与赛事系统同一套：注册码优先；无码需组织 allow_open_reg 开关放开，产生 locked=1 观众号。
     if (method === 'POST' && seg[0] === 'register') {
+      // OIDC 模式：注册入口移交认证中心（直写赛事库的注册代码步骤③才彻底删除，本模式下不再可达）
+      if (isOidc(env)) return Response.redirect(`${env.OIDC_ISSUER}/register`, 302);
       if (!env.TOUR_DB) throw new HttpError(500, '未配置赛事库');
       const ip = request.headers.get('CF-Connecting-IP') || 'local';
       if (!(await rateLimit(env, `reg:${ip}`, 5, 3600))) throw new HttpError(429, '注册太频繁，请一小时后再试');
@@ -266,6 +275,8 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
 
     // 改密：写回赛事系统 user 表（共享账号池），两边任一站改密全站生效
     if (method === 'POST' && seg[0] === 'password') {
+      // OIDC 模式：本站无改密入口，浏览器带去认证中心改密页
+      if (isOidc(env)) return Response.redirect(`${env.OIDC_ISSUER}/password`, 302);
       const user = await requireUser(env, request);
       if (!env.TOUR_DB) throw new HttpError(500, '未配置赛事库');
       if (!user.tour_id) throw new HttpError(400, '当前账号未关联赛事系统身份');
@@ -289,6 +300,8 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
     // must_change_pw=1 与赛事系统同规则：照常登录并建会话，但响应带 mustChangePassword，
     // 由前端强制引导到改密页，其余业务接口由 requirePwChanged 拦下。
     if (method === 'POST' && seg[0] === 'login') {
+      // OIDC 模式：验密登录移交认证中心，302 进本站发起的 authorize 链
+      if (isOidc(env)) return Response.redirect(`${env.OIDC_REDIRECT_ORIGIN || new URL(request.url).origin}/api/auth/login`, 302);
       if (!env.TOUR_DB) throw new HttpError(500, '未配置赛事库');
       const ip = request.headers.get('CF-Connecting-IP') || 'local';
       // IP 限流与请求体解析并行；账号限流要等 body 里的用户名，只能串在其后
@@ -315,18 +328,38 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
     if (method === 'POST' && seg[0] === 'logout') {
       const token = (request.headers.get('Cookie') || '').match(/whl_sess=([a-f0-9]+)/)?.[1];
       if (token) await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(await sha256hex(token)).run();
+      // OIDC 模式：旧缓存页面的登出也要吊销本地 OIDC 会话，别留活会话；
+      // 完整登出（连认证中心一起）由前端改走 /api/auth/logout 的表单跳转，redirect 给出地址
+      if (isOidc(env)) {
+        const oidcToken = oidcSessionToken(request);
+        if (oidcToken) {
+          await env.DB.prepare('UPDATE oidc_session SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL')
+            .bind(nowISO(), await sha256hex(oidcToken)).run();
+        }
+        return json(
+          { ok: true, redirect: `${env.OIDC_ISSUER}/logout?post_logout_redirect_uri=${encodeURIComponent(new URL(request.url).origin + '/')}` },
+          200,
+          { 'Set-Cookie': clearOidcSessionCookie() },
+        );
+      }
       return json({ ok: true }, 200, { 'Set-Cookie': clearSessionCookie() });
     }
 
     if (method === 'GET' && seg[0] === 'me') {
       const user = await getAuthUser(env, request);
-      if (!user) return json({ user: null });
+      // 未登录也带 authMode/authHome：前端进站第一件事就是渲染登录入口，得知道往哪跳
+      if (!user) return json({ user: null, authMode: isOidc(env) ? 'oidc' : 'shared', authHome: isOidc(env) ? env.OIDC_ISSUER : null });
       // 绑定信息与发起人标记互不依赖，并行查（/me 每次进站都要走）
       const [binding, isInit] = await Promise.all([
         env.DB.prepare('SELECT qq_id, bound_at FROM user_binding WHERE user_id = ?').bind(user.id).first(),
         user.role === 'admin' ? Promise.resolve(true) : isInitiator(env, user.id),
       ]) as any[];
-      return json({ user, binding: binding || null, is_initiator: isInit, mustChangePassword: !!user.mustChangePw });
+      // authMode/authHome（统一认证迁移步骤②）：前端据此分流登录/注册/改密/登出入口；
+      // 兼容模式 authHome=null，旧前端不读这两个字段，行为不变
+      return json({
+        user, binding: binding || null, is_initiator: isInit, mustChangePassword: !!user.mustChangePw,
+        authMode: isOidc(env) ? 'oidc' : 'shared', authHome: isOidc(env) ? env.OIDC_ISSUER : null,
+      });
     }
 
     if (method === 'POST' && seg[0] === 'bind' && seg[1] === 'new') {

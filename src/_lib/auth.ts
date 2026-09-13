@@ -2,6 +2,7 @@
 // 插件方向请求用 HMAC-SHA256 签名验证（SYNC_SECRET 共享密钥）。
 
 import { HttpError } from './http.ts';
+import { isOidc, OIDC_SESSION_COOKIE } from './oidc.ts';
 
 const enc = new TextEncoder();
 
@@ -129,6 +130,10 @@ export async function getAuthUser(env: any, request: Request): Promise<any | nul
 }
 
 async function resolveAuthUser(env: any, request: Request): Promise<any | null> {
+  // 双模式互斥（统一认证迁移步骤②，auth 项目 PRD P0-6）：配了 OIDC_ISSUER 就只认
+  // 认证中心签发的本地会话，不再回落共享 cookie / 30 天本地会话——
+  // 两种登录态并存会让「登出」语义说不清
+  if (isOidc(env)) return resolveOidcUser(env, request);
   const tour = await getTourSessionUser(env, request).catch((e: any) => {
     console.error('[tour-auth] failed:', e?.message || e);
     return null;
@@ -144,6 +149,27 @@ async function resolveAuthUser(env: any, request: Request): Promise<any | null> 
   if (!local) return null;
   // 本地会话也要问一次赛事库：管理员重置密码后，旧会话同样该被拦去改密
   return { ...local, mustChangePw: await tourMustChangePw(env, local.tour_id) };
+}
+
+// OIDC 模式会话：__Host-guess_session cookie → oidc_session 表（只存 token 哈希）→
+// sub（过渡期即 tour user id）→ 现查赛事库 → 镜像 users（预测/发奖的 JOIN 与
+// user_binding 都锚在本地 users.id，镜像后两模式行为完全等价）。
+// 本地 30 天会话就此退役：旧 whl_sess cookie 在本模式下直接失效。
+async function resolveOidcUser(env: any, request: Request): Promise<any | null> {
+  const token = getCookie(request, OIDC_SESSION_COOKIE);
+  if (!token) return null;
+  const row = await env.DB.prepare(
+    'SELECT sub FROM oidc_session WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?',
+  ).bind(await sha256hex(token), new Date().toISOString()).first() as any;
+  if (!row) return null;
+  const tourId = Number(row.sub);
+  if (!Number.isInteger(tourId) || tourId <= 0 || !env.TOUR_DB) return null;
+  const tour = await env.TOUR_DB.prepare(
+    'SELECT id, name, role, locked, must_change_pw FROM user WHERE id = ?',
+  ).bind(tourId).first() as any;
+  if (!tour) return null;
+  const local = await mirrorTourUser(env, tour);
+  return { ...local, mustChangePw: tour.must_change_pw === 1 };
 }
 
 async function tourMustChangePw(env: any, tourId: number | null): Promise<boolean> {
@@ -185,7 +211,8 @@ export async function requireUser(env: any, request: Request): Promise<any> {
 export async function requirePwChanged(env: any, request: Request): Promise<void> {
   const user = await getAuthUser(env, request);
   if (user?.mustChangePw) {
-    throw new HttpError(403, '密码刚被重置，请先设置新密码', 'password_change_required');
+    // 改密地点随模式：OIDC 模式下本站没有改密入口，去认证中心
+    throw new HttpError(403, isOidc(env) ? '密码刚被重置，请先到认证中心设置新密码' : '密码刚被重置，请先设置新密码', 'password_change_required');
   }
 }
 
