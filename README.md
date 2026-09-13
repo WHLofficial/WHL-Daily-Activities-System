@@ -53,6 +53,21 @@ bash scripts/smoke-test.sh                                # 端到端冒烟（�
 
 **Windows 注意**：`wrangler dev` 崩溃后常残留 `workerd.exe` 孤儿进程，重启前先 `taskkill /F /IM workerd.exe`。本地开发用 8789 端口——8788 被历史僵尸连接污染过会一直挂起。
 
+### OIDC 模式（统一认证迁移步骤②，auth 项目 PRD P0-6）
+
+配置 `OIDC_ISSUER` + `OIDC_CLIENT_ID` 即切换为认证中心登录（撤掉变量重新部署 = 回滚到共享 cookie/本地会话）；本地联调再加 `OIDC_REDIRECT_ORIGIN`（wrangler dev 会把 custom_domain 路由的 request.url 重写成 `http://guess.whleague.win`，需覆盖回本端口；生产是 https 正确值，无需配置）：
+
+```bash
+# 前置：auth 项目已起 dev（8792）并播种 guess client 与测试账号（auth 项目 seed-local-*.mjs 的 SQL）
+#   guess 本地赛事库需有与 auth 账号同 id 的 user 行（如 id=6/7 → oidctest4/5），同样 dev 启动【前】执行
+npm run db:migrate:local        # 0008_oidc_session（OIDC 本地会话表）
+npm run dev:oidc                # 8796 端口起 OIDC 模式
+npx vitest run                  # 单元测试（in-process 伪认证中心，7 例）
+node scripts/smoke-oidc-local.mjs                        # 双服务联调（19 项断言，可连跑）
+```
+
+OIDC 模式行为变化：登录/注册/改密入口 302 移交认证中心（直写赛事库的旧代码不再可达）；本地 30 天会话退役，改用 7 天 OIDC 会话（`__Host-guess_session`）；QQ 绑定读写本期仍走本地 `user_binding`（绑定全流程搬认证中心属 PRD P0-8，届时执行 user_binding → auth.identity 迁移）；auth 主动登出会经 back-channel 通知本站按 sid 吊销会话。
+
 ## 部署（首次）
 
 > 保姆级分步指南（含验证点/验收清单/故障排查）见 **[docs/DEPLOY.md](./docs/DEPLOY.md)**，以下为速查版。
