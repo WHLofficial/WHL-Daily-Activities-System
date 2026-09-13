@@ -342,7 +342,22 @@ async function renderBind() {
         <h3>QQ 绑定</h3>
         <p>已绑定 QQ：<b>${esc(binding.qq_id)}</b></p>
         <p class="muted">绑定时间 ${fmtTime(binding.bound_at)}</p>
+        ${me?.authMode === 'oidc' ? '<p class="muted">解绑请在 QQ 群里发送「解绑」；换绑请先解绑，再到认证中心生成新绑定码。不影响积分余额。</p>' : ''}
       </div>`;
+    return;
+  }
+  if (me?.authMode === 'oidc') {
+    // 统一认证模式（P0-8）：生成码与解绑都在认证中心操作，本站只读登录时的绑定快照；
+    // 绑完走一遍重新登录（认证中心会话还在，全程免密）即可同步状态
+    app.innerHTML = `
+      <div class="card">
+        <h3>绑定 QQ</h3>
+        <p class="muted">绑定后，竞猜积分才能自动发到你的 QQ 上。绑定在统一认证中心完成。</p>
+        <div class="row mt"><button class="grow" id="bind-auth">去认证中心绑定</button></div>
+        <div class="row mt-s"><button class="ghost small" id="bind-refresh">绑定好了？重新登录同步状态</button></div>
+      </div>`;
+    document.getElementById('bind-auth').onclick = () => authCenter(me, '/bind');
+    document.getElementById('bind-refresh').onclick = () => { location.href = '/api/auth/login'; };
     return;
   }
   app.innerHTML = `
