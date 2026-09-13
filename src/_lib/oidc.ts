@@ -1,13 +1,13 @@
-// 统一认证接入（迁移步骤②，auth 项目 PRD P0-6）：OIDC RP 侧小件 + 四端点。
+// 统一认证接入（迁移步骤②③，auth 项目 PRD P0-6/P0-10）：OIDC RP 侧小件 + 四端点。
 // 与 club 平台同构（__Host- 会话 cookie / PKCE S256 / JWKS 缓存 / back-channel 吊销）；
 // 签发侧在 auth 服务，这里只做客户端。配置 OIDC_ISSUER + OIDC_CLIENT_ID 即切换，
 // 未配置 = 兼容模式（共享 cookie 透传 + 本地 30 天会话），/api/auth/* 端点按需退化。
-// 不调 userinfo：过渡期 sub 即 tour user id，姓名/角色由本站现查赛事库，不信任令牌声明；
-// QQ 绑定读写本期仍走本地 user_binding（绑定全流程搬 auth 属 PRD P0-8）。
+// 步骤③收口：回调拉 userinfo 存 claims（角色/权限/状态），判定不再查赛事库 user 表；
+// QQ 绑定镜像随回调的 userinfo 快照同步本地 user_binding（绑定全流程搬 auth 属 PRD P0-8）。
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import { HttpError } from './http.ts';
 // 运行时才引用（函数声明，无模块求值期依赖）：auth.ts 也反向导入本文件，ESM 环安全
-import { mirrorTourUser } from './auth.ts';
+import { mirrorClaimsUser, parseOidcClaims } from './auth.ts';
 
 export const OIDC_SESSION_COOKIE = '__Host-guess_session';
 // authorize 跳转前的 state/nonce/verifier 中转（10 分钟寿命，登录完成后即删）
@@ -111,22 +111,16 @@ function jwksFor(issuer: string): ReturnType<typeof createRemoteJWKSet> {
   return jwks;
 }
 
-// QQ 绑定镜像（P0-8）：绑定真源在 auth 的 identity 表，本站在登录回调时用 userinfo 的
-// qq 快照同步本地 user_binding——预测门槛、发奖批量、对账的 JOIN 全部零改动，兼容模式
-// 行为完全等价。登录之后站点外的绑定/解绑变化要等下一次登录才刷进来（OIDC 模式下绑定
-// 入口已移交认证中心，前端指引重登刷新）。userinfo 拉取失败时保留旧快照，不因瞬时故障
-// 误删绑定。本地锚点用镜像 users.id（user_binding 既有外键语义）。
-async function mirrorBinding(env: any, sub: string, accessToken: string): Promise<void> {
+// QQ 绑定镜像（P0-8）：绑定真源在 auth 的 identity 表，登录回调用 userinfo 的 qq 快照
+// 同步本地 user_binding——预测门槛、发奖批量、对账的 JOIN 全部零改动，兼容模式行为完全
+// 等价。登录之后站点外的绑定/解绑变化要等下一次登录才刷进来（OIDC 模式下绑定入口已移交
+// 认证中心，前端指引重登刷新）。本地锚点用镜像 users.id（user_binding 既有外键语义）。
+// 步骤③收口：userinfo 由回调统一拉取校验后传入（含 claims 所需字段），镜像也从 claims 建立，
+// 不再查赛事库 user 表。
+async function mirrorBinding(env: any, sub: string, info: { qq?: unknown; name: string; roles: string[] }): Promise<void> {
   try {
-    const tour = await env.TOUR_DB.prepare('SELECT id, name, role FROM user WHERE id = ?').bind(Number(sub)).first();
-    if (!tour) return;
-    const local = await mirrorTourUser(env, tour);
-    const ui = await fetch(`${env.OIDC_ISSUER}/userinfo`, {
-      headers: { authorization: `Bearer ${accessToken}` },
-    });
-    if (!ui.ok) return;
-    const info = (await ui.json().catch(() => null)) as { qq?: unknown } | null;
-    const qq = typeof info?.qq === 'string' && info.qq ? info.qq : null;
+    const local = await mirrorClaimsUser(env, sub, info);
+    const qq = typeof info.qq === 'string' && info.qq ? info.qq : null;
     if (qq) {
       await env.DB.batch([
         // auth 已保证 QQ 全局唯一；本地镜像若残留同 QQ 挂在别人名下的旧行（迁移前旧数据），
@@ -167,7 +161,7 @@ export async function handleOidc(env: any, request: Request, seg: string[], meth
       response_type: 'code',
       client_id: env.OIDC_CLIENT_ID,
       redirect_uri: `${origin}/api/auth/callback`,
-      scope: 'openid',
+      scope: 'openid profile', // profile 供 userinfo 下发姓名（角色/权限/状态不按 scope 收费）
       state,
       nonce,
       code_challenge: await pkceChallenge(verifier),
@@ -210,7 +204,7 @@ export async function handleOidc(env: any, request: Request, seg: string[], meth
     const tokens = tokenRes.ok
       ? ((await tokenRes.json().catch(() => null)) as { id_token?: unknown; access_token?: unknown } | null)
       : null;
-    if (!tokens || typeof tokens.id_token !== 'string') {
+    if (!tokens || typeof tokens.id_token !== 'string' || typeof tokens.access_token !== 'string') {
       throw new HttpError(502, '认证中心换票失败，请稍后重试', 'oidc_token_error');
     }
 
@@ -235,15 +229,24 @@ export async function handleOidc(env: any, request: Request, seg: string[], meth
       throw new HttpError(502, '登录凭证不完整，请重新登录', 'oidc_claim_error');
     }
 
+    // 步骤③收口：拉 userinfo 并验形——claims（角色/权限/状态）是本地判定唯一来源，
+    // 拉取失败/缺字段 → 502 不建会话；qq 快照一并在此取（绑定镜像复用这一次拉取）
+    const uiRes = await fetch(`${env.OIDC_ISSUER}/userinfo`, {
+      headers: { authorization: `Bearer ${tokens.access_token}` },
+    });
+    const info = uiRes.ok ? ((await uiRes.json().catch(() => null)) as Record<string, unknown> | null) : null;
+    const claims = parseOidcClaims(info);
+    if (!claims) throw new HttpError(502, '账号信息拉取失败，请重新登录', 'oidc_userinfo_error');
+
     const now = new Date().toISOString();
     await env.DB.prepare('DELETE FROM oidc_session WHERE expires_at < ?').bind(now).run();
     const token = randomB64url(32);
     await env.DB.prepare(
-      'INSERT INTO oidc_session (token_hash, sub, auth_sid, created_at, expires_at) VALUES (?, ?, ?, ?, ?)',
-    ).bind(await sha256hex(token), payload.sub, payload.sid, now,
+      'INSERT INTO oidc_session (token_hash, sub, auth_sid, claims, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).bind(await sha256hex(token), payload.sub, payload.sid, JSON.stringify(claims), now,
       new Date(Date.now() + SESSION_TTL_SECONDS * 1000).toISOString()).run();
 
-    await mirrorBinding(env, payload.sub, String(tokens.access_token));
+    await mirrorBinding(env, payload.sub, info as { qq?: unknown; name: string; roles: string[] });
     return redirect('/', sessionCookie(token), clearCookie(OIDC_TEMP_COOKIE));
   }
 

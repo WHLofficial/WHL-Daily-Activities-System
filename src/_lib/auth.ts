@@ -92,6 +92,47 @@ export async function mirrorTourUser(env: any, tour: any): Promise<any> {
   ).bind(tour.id, tour.name, tour.name, role).first();
 }
 
+// ---- 步骤③收口（auth P0-10，TECH_DESIGN §6.3）----
+// userinfo / 会话内 claims 的统一校验：accept 对象（回调刚拉到的 userinfo）或
+// JSON 串（oidc_session.claims 列），字段不齐一律视为无效（解析失败 = 未登录）。
+export type OidcClaims = {
+  name: string;
+  locked: boolean;
+  must_change_pw: boolean;
+  roles: string[];
+  permissions: string[];
+};
+
+export function parseOidcClaims(raw: unknown): OidcClaims | null {
+  let t = raw;
+  if (typeof t === 'string') {
+    try { t = JSON.parse(t); } catch { return null; }
+  }
+  if (typeof t !== 'object' || t === null) return null;
+  const c = t as Partial<OidcClaims>;
+  if (
+    typeof c.name !== 'string' || !c.name ||
+    typeof c.locked !== 'boolean' ||
+    typeof c.must_change_pw !== 'boolean' ||
+    !Array.isArray(c.roles) || !c.roles.every((r) => typeof r === 'string') ||
+    !Array.isArray(c.permissions) || !c.permissions.every((p) => typeof p === 'string')
+  ) return null;
+  return { name: c.name, locked: c.locked, must_change_pw: c.must_change_pw, roles: c.roles, permissions: c.permissions };
+}
+
+// 本地镜像锚点改由 claims 建立：账号真源在 auth 库，不再查赛事库 user 表（收口后新账号
+// 在赛事库无行）。role 投影与旧映射等价（guess.admin/superadmin → admin，其余 → user）；
+// 镜像 users 只服务预测/发奖的 JOIN 与绑定外键，判定一律走 claims.permissions。
+export async function mirrorClaimsUser(env: any, sub: string, claims: { name: string; roles: string[] }): Promise<any> {
+  const role = claims.roles.includes('guess.admin') || claims.roles.includes('superadmin') ? 'admin' : 'user';
+  return env.DB.prepare(
+    `INSERT INTO users (tour_id, username, display_name, role, password_salt, password_hash)
+       VALUES (?, ?, ?, ?, '', '')
+       ON CONFLICT(tour_id) DO UPDATE SET display_name = excluded.display_name, role = excluded.role
+     RETURNING id, tour_id, username, display_name, role`,
+  ).bind(Number(sub), claims.name, claims.name, role).first();
+}
+
 async function getTourSessionUser(env: any, request: Request): Promise<any | null> {
   if (!env.SESSION_KV || !env.TOUR_DB) return null;
   const token = getCookie(request, TOUR_COOKIE);
@@ -151,25 +192,24 @@ async function resolveAuthUser(env: any, request: Request): Promise<any | null> 
   return { ...local, mustChangePw: await tourMustChangePw(env, local.tour_id) };
 }
 
-// OIDC 模式会话：__Host-guess_session cookie → oidc_session 表（只存 token 哈希）→
-// sub（过渡期即 tour user id）→ 现查赛事库 → 镜像 users（预测/发奖的 JOIN 与
-// user_binding 都锚在本地 users.id，镜像后两模式行为完全等价）。
+// OIDC 模式会话：__Host-guess_session cookie → oidc_session 表（token 哈希 + claims）→
+// claims 解析 → 镜像 users（预测/发奖的 JOIN 与 user_binding 都锚在本地 users.id）。
+// 步骤③收口：姓名/状态/角色/权限全部来自登录回调存档的 claims，不再查赛事库 user 表
+// （账号真源在 auth 库）；claims 缺失/损坏的旧会话视为未登录，重登一次即恢复。
 // 本地 30 天会话就此退役：旧 whl_sess cookie 在本模式下直接失效。
 async function resolveOidcUser(env: any, request: Request): Promise<any | null> {
   const token = getCookie(request, OIDC_SESSION_COOKIE);
   if (!token) return null;
   const row = await env.DB.prepare(
-    'SELECT sub FROM oidc_session WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?',
+    'SELECT sub, claims FROM oidc_session WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?',
   ).bind(await sha256hex(token), new Date().toISOString()).first() as any;
   if (!row) return null;
+  const claims = parseOidcClaims(row.claims);
+  if (!claims) return null;
   const tourId = Number(row.sub);
-  if (!Number.isInteger(tourId) || tourId <= 0 || !env.TOUR_DB) return null;
-  const tour = await env.TOUR_DB.prepare(
-    'SELECT id, name, role, locked, must_change_pw FROM user WHERE id = ?',
-  ).bind(tourId).first() as any;
-  if (!tour) return null;
-  const local = await mirrorTourUser(env, tour);
-  return { ...local, mustChangePw: tour.must_change_pw === 1 };
+  if (!Number.isInteger(tourId) || tourId <= 0) return null;
+  const local = await mirrorClaimsUser(env, row.sub, claims);
+  return { ...local, mustChangePw: claims.must_change_pw, permissions: claims.permissions };
 }
 
 async function tourMustChangePw(env: any, tourId: number | null): Promise<boolean> {
@@ -192,13 +232,25 @@ export async function isInitiator(env: any, userId: number, request?: Request): 
   return ok;
 }
 
-// 开放竞猜/截止/录比分/结算/确认发奖：仅管理员或发起人可进行此操作
+// 开放竞猜/截止/录比分/结算/确认发奖：管理员或发起人。步骤③判定口径：
+// OIDC 模式按权限点（guess.admin 经 guess.event.manage 下发；发起人经 guess.initiator
+// 角色由 auth 播种同一权限点，本地 initiators 名单兜底）；兼容模式回落旧角色判定。
 export async function requireManager(env: any, request: Request): Promise<any> {
   const user = await requireUser(env, request);
-  if (user.role !== 'admin' && !(await isInitiator(env, user.id, request))) {
+  const adminOk = isOidc(env)
+    ? (user.permissions ?? []).includes('guess.event.manage')
+    : user.role === 'admin';
+  if (!adminOk && !(await isInitiator(env, user.id, request))) {
     throw new HttpError(403, '仅管理员或发起人可进行此操作');
   }
   return user;
+}
+
+// 管理台内部判定（发起人不可用的管理端点）：OIDC 按权限点；兼容模式回落 admin 角色。
+// guess.users.manage / guess.payout.reverse / guess.recon.view 的持有人与旧 admin 角色完全重合
+export async function requireAdminPerm(env: any, request: Request, user: any, perm: string, message: string): Promise<void> {
+  const ok = isOidc(env) ? (user.permissions ?? []).includes(perm) : user.role === 'admin';
+  if (!ok) throw new HttpError(403, message);
 }
 
 export async function requireUser(env: any, request: Request): Promise<any> {

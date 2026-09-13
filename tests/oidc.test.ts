@@ -52,6 +52,9 @@ interface StubState {
   sid: string;
   idToken?: string;
   tokenStatus?: number;
+  name?: string;
+  roles?: string[];
+  permissions?: string[];
   qq?: string | null;
   userinfoStatus?: number;
   tokenCalls: URLSearchParams[];
@@ -68,9 +71,19 @@ async function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   }
   if (url.pathname.endsWith('/userinfo')) {
     if (stub.userinfoStatus) return new Response('boom', { status: stub.userinfoStatus });
-    return new Response(JSON.stringify({ sub: stub.sub, qq: stub.qq ?? null }), {
-      headers: { 'content-type': 'application/json' },
-    });
+    // auth userinfo 形状（aud=guess）：角色/权限按 §6.2 播种投影
+    return new Response(
+      JSON.stringify({
+        sub: stub.sub,
+        name: stub.name ?? 'oidctest4',
+        locked: false,
+        must_change_pw: false,
+        roles: stub.roles ?? ['guess.admin'],
+        permissions: stub.permissions ?? ['guess.event.manage', 'guess.users.manage', 'guess.payout.reverse', 'guess.recon.view'],
+        qq: stub.qq ?? null,
+      }),
+      { headers: { 'content-type': 'application/json' } },
+    );
   }
   if (url.pathname.endsWith('/token')) {
     const form = init?.body instanceof URLSearchParams ? init.body : new URLSearchParams(String(init?.body ?? ''));
@@ -158,7 +171,7 @@ interface Fixture {
 
 function freshEnv(oidc: boolean): Fixture {
   const sqlite = new DatabaseSync(':memory:');
-  for (const f of ['0001_init.sql', '0002_tour_auth.sql', '0003_exhausted.sql', '0004_payout_claim.sql', '0005_wdl_all.sql', '0006_notify_remind.sql', '0007_indexes.sql', '0008_oidc_session.sql']) {
+  for (const f of ['0001_init.sql', '0002_tour_auth.sql', '0003_exhausted.sql', '0004_payout_claim.sql', '0005_wdl_all.sql', '0006_notify_remind.sql', '0007_indexes.sql', '0008_oidc_session.sql', '0009_oidc_claims.sql']) {
     sqlite.exec(readFileSync(new URL(`../migrations/${f}`, import.meta.url), 'utf8'));
   }
   const tour = new DatabaseSync(':memory:');
@@ -265,7 +278,7 @@ describe('统一认证接入（步骤② OIDC RP）', () => {
     expect(u.searchParams.get('response_type')).toBe('code');
     expect(u.searchParams.get('client_id')).toBe(CLIENT_ID);
     expect(u.searchParams.get('redirect_uri')).toBe('http://localhost/api/auth/callback');
-    expect(u.searchParams.get('scope')).toBe('openid');
+    expect(u.searchParams.get('scope')).toBe('openid profile');
     expect(u.searchParams.get('code_challenge_method')).toBe('S256');
     expect(u.searchParams.get('code_challenge')).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(u.searchParams.has('nonce')).toBe(true);
@@ -290,11 +303,15 @@ describe('统一认证接入（步骤② OIDC RP）', () => {
     expect(sc).toContain('Secure');
     expect(sc).toContain('Max-Age=604800');
 
-    const row = sqlite.prepare('SELECT token_hash, sub, auth_sid, revoked_at FROM oidc_session').get() as any;
+    const row = sqlite.prepare('SELECT token_hash, sub, auth_sid, claims, revoked_at FROM oidc_session').get() as any;
     expect(row).toEqual({
       token_hash: createHash('sha256').update(session!).digest('hex'),
       sub: '6',
       auth_sid: 'sid-1',
+      claims: JSON.stringify({
+        name: 'oidctest4', locked: false, must_change_pw: false, roles: ['guess.admin'],
+        permissions: ['guess.event.manage', 'guess.users.manage', 'guess.payout.reverse', 'guess.recon.view'],
+      }),
       revoked_at: null,
     });
 
@@ -410,6 +427,24 @@ describe('统一认证接入（步骤② OIDC RP）', () => {
     const alive = sqlite.prepare("SELECT revoked_at FROM oidc_session WHERE auth_sid = 'sid-bc-2'").get() as any;
     expect(alive?.revoked_at).toBeNull();
   });
+
+  it('步骤③收口：登录/认人/镜像只认会话 claims，赛事库 user 表出环', async () => {
+    vi.stubGlobal('fetch', fakeFetch);
+    const { env } = freshEnv(true);
+    // 把 TOUR_DB 换成一碰就炸的代理：登录、认人、镜像建立都不该再查它
+    env.TOUR_DB = {
+      prepare() {
+        throw new Error('TOUR_DB must not be queried after 收口');
+      },
+    };
+    const { session } = await oidcLogin(env);
+    expect(session).toBeTruthy();
+    const me = await call(env, 'GET', '/api/me', { cookie: `__Host-guess_session=${session}` });
+    const body = await me.json();
+    expect(body.user.username).toBe('oidctest4'); // 镜像从 claims 重建
+    expect(body.user.role).toBe('admin');
+    expect(body.user.permissions).toContain('guess.event.manage');
+  });
 });
 
 describe('QQ 绑定镜像与端点收口（P0-8）', () => {
@@ -433,7 +468,10 @@ describe('QQ 绑定镜像与端点收口（P0-8）', () => {
     await oidcLogin(env, { qq: '22222' }); // 换绑：同账号还是一行
     expect(rowsOf()).toEqual([{ qq_id: '22222' }]);
 
-    await oidcLogin(env, { qq: '33333', userinfoStatus: 500 }); // userinfo 挂了
+    // userinfo 挂了：claims 是判定唯一来源，登录整体 502（旧「软失败建会话」语义随收口退役）；
+    // 旧绑定快照不被误删，重登成功后按认证中心现状刷新
+    const failed = await oidcLogin(env, { qq: '33333', userinfoStatus: 500 });
+    expect(failed.cb.status).toBe(502);
     expect(rowsOf()).toEqual([{ qq_id: '22222' }]);
 
     await oidcLogin(env, { qq: null }); // 认证中心侧已解绑

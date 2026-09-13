@@ -4,7 +4,7 @@
 import { HttpError, json, readBody, nowISO } from './_lib/http.ts';
 import {
   sha256hex, createSession, sessionCookie, clearSessionCookie,
-  getAuthUser, requireUser, requireRole, requireManager, isInitiator, verifyPluginRequest, assertCronKey,
+  getAuthUser, requireUser, requireRole, requireManager, requireAdminPerm, isInitiator, verifyPluginRequest, assertCronKey,
   rateLimit, mirrorTourUser, requirePwChanged,
 } from './_lib/auth.ts';
 import { sha256Hex, tourHashPassword, tourVerifyPassword } from './_lib/tourcrypto.ts';
@@ -577,7 +577,8 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
 
       // 账号列表（含赛事系统镜像标记与发起人状态）
       if (method === 'GET' && seg[1] === 'users' && seg.length === 2) {
-        if (user.role !== 'admin') throw new HttpError(403, '仅管理员可查看账号');
+        // 步骤③：OIDC 按权限点判定（持有人与旧 admin 角色重合），兼容模式回落角色
+        await requireAdminPerm(env, request, user, 'guess.users.manage', '仅管理员可查看账号');
         const rows = (await env.DB.prepare(
           `SELECT u.id, u.username, u.display_name, u.role, u.tour_id,
                   (b.user_id IS NOT NULL) AS bound,
@@ -592,7 +593,7 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
 
       // 发起人名单开关
       if (method === 'POST' && seg[1] === 'initiators' && seg.length === 2) {
-        if (user.role !== 'admin') throw new HttpError(403, '仅管理员可设置发起人');
+        await requireAdminPerm(env, request, user, 'guess.users.manage', '仅管理员可设置发起人');
         const body = await readBody(request);
         const userId = Number(body.userId);
         if (!Number.isInteger(userId)) throw new HttpError(400, 'userId 不合法');
@@ -955,7 +956,7 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
       }
 
       if (method === 'POST' && seg[1] === 'payouts' && seg[3] === 'reverse') {
-        if (user.role !== 'admin') throw new HttpError(403, '仅管理员可冲正');
+        await requireAdminPerm(env, request, user, 'guess.payout.reverse', '仅管理员可冲正');
         const item = await env.DB.prepare(
           `SELECT pi.*, b.event_id FROM payout_item pi JOIN payout_batch b ON b.id = pi.batch_id WHERE pi.payout_id = ?`,
         ).bind(seg[2]).first() as any;
@@ -979,7 +980,7 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
       }
 
       if (method === 'GET' && seg[1] === 'recon') {
-        if (user.role !== 'admin') throw new HttpError(403, '仅管理员可查看对账');
+        await requireAdminPerm(env, request, user, 'guess.recon.view', '仅管理员可查看对账');
         const rows = (await env.DB.prepare('SELECT * FROM recon_run ORDER BY id DESC LIMIT 10').all()).results;
         return json({ runs: rows });
       }
