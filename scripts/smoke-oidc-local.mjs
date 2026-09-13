@@ -141,7 +141,7 @@ ok(me0Body.user === null && me0Body.authMode === 'oidc' && me0Body.authHome === 
 // 1) 用户一（oidctest4）全链路登录
 const u1 = await rpLogin({ name: 'oidctest4', password: 'TestPass123' });
 ok(u1.start.status === 302 && (new URL(u1.authzUrl)).origin + u1.authzUrl.pathname === `${AUTH}/authorize`, 'guess /auth/login 302 到认证中心 authorize');
-ok(u1.authzUrl.searchParams.get('client_id') === 'guess' && u1.authzUrl.searchParams.get('scope') === 'openid', 'client_id=guess，scope=openid');
+ok(u1.authzUrl.searchParams.get('client_id') === 'guess' && u1.authzUrl.searchParams.get('scope') === 'openid profile', 'client_id=guess，scope=openid profile');
 ok(u1.authzUrl.searchParams.get('code_challenge_method') === 'S256' && /^[A-Za-z0-9_-]{43}$/.test(u1.authzUrl.searchParams.get('code_challenge') ?? ''), 'PKCE S256 challenge（43 位 base64url）');
 ok(u1.back.status === 303 && (u1.cbUrl.origin + u1.cbUrl.pathname) === `${GUESS}/api/auth/callback`, 'authorize 303 跳回 guess callback');
 ok(u1.cbUrl.searchParams.get('iss') === AUTH && !!u1.cbUrl.searchParams.get('code'), '回跳带 code 与 iss（RFC 9207）');
