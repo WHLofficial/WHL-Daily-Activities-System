@@ -3,7 +3,9 @@
 // 全链路手推浏览器跳转（redirect: manual + 手写 cookie jar）：
 //   guess 发起 authorize → auth 登录 → 回跳建 guess 会话 → /api/me 认人（含本地镜像）
 //   → auth 主动登出推 back-channel 吊销 guess 会话 → guess RP 登出走 end_session
-//   → 旧入口（login/register/password）确认 302 移交认证中心。
+//   → 旧入口（login/register/password）确认 302 移交认证中心
+//   → QQ 绑定镜像链路（P0-8）：auth 绑定页生成码 → 插件视角 HMAC claim →
+//     guess 重登同步快照 → 本站绑定端点下线（bind_moved）→ 解绑后快照清空。
 // 前置（顺序重要）：
 //   1) auth 项目：种子用户与 guess client（node scripts/seed-local-users.mjs /
 //      seed-local-oidc.mjs 的 SQL 灌入本地库），并起 wrangler dev --port 8792
@@ -13,7 +15,8 @@
 // 注意：auth 登录限流 5 次/15 分钟/账号（成功也计数），脚本开头顺手清掉
 // auth 本地 RL_KV 的限流键（跨项目调用 wrangler，失败只提示不阻断）。
 import { execFileSync } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { createHmac } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
@@ -74,7 +77,7 @@ function clearAuthRlKeys() {
     );
     const names = JSON.parse(out)
       .map((k) => k.name)
-      .filter((n) => n.startsWith('rl:login-name:') || n.startsWith('rl:pwd:'));
+      .filter((n) => n.startsWith('rl:login-name:') || n.startsWith('rl:pwd:') || n.startsWith('rl:bind-code:'));
     if (!names.length) return;
     const file = `${tmpdir()}/rl-clear-${Date.now()}.json`;
     writeFileSync(file, JSON.stringify(names));
@@ -110,7 +113,18 @@ async function rpLogin({ name, password }) {
 
   const cb = await req(guessJar, cbUrl);
   const me = await req(guessJar, `${GUESS}/api/me`);
-  return { start, authzUrl, doLogin, back, cbUrl, cb, me };
+  return { guessJar, authJar, start, authzUrl, doLogin, back, cbUrl, cb, me };
+}
+
+/** 重放 RP 登录链（auth 会话还在 → authorize 静默回跳，全程免密），刷新 guess 绑定快照 */
+async function rpRelogin(guessJar, authJar) {
+  const start = await req(guessJar, `${GUESS}/api/auth/login`);
+  const authzUrl = new URL(start.headers.get('location'));
+  const back = await req(authJar, authzUrl);
+  const cbUrl = new URL(back.headers.get('location'), AUTH);
+  const cb = await req(guessJar, cbUrl);
+  const me = await req(guessJar, `${GUESS}/api/me`);
+  return { cb, me };
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -173,9 +187,52 @@ ok(oldPassword.status === 302 && oldPassword.headers.get('location') === `${AUTH
 const forged = await req(null, `${GUESS}/api/auth/backchannel-logout`, { method: 'POST', form: { logout_token: 'not-a-jwt' } });
 ok(forged.status === 400, '伪造 logout_token 被 guess 拒绝（400）');
 
+// 7) QQ 绑定镜像链路（P0-8）：auth 页生成码 → 插件视角 HMAC claim → guess 重登同步快照
+// 需要 auth/.dev.vars 配 BIND_SECRET（与 auth dev 服务同源）
+const BIND_SECRET = (readFileSync(fileURLToPath(new URL('../../WHL-auth-service/.dev.vars', import.meta.url)), 'utf8').match(/^BIND_SECRET=(.+)$/m) ?? [])[1]?.trim();
+if (!BIND_SECRET) {
+  console.log('✗ auth/.dev.vars 缺 BIND_SECRET，绑定镜像段跳过');
+} else {
+  const QQ = '765432109';
+  const hmacPost = async (path, bodyObj) => {
+    const raw = JSON.stringify(bodyObj);
+    const ts = Math.floor(Date.now() / 1000);
+    return fetch(`${AUTH}${path}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-timestamp': String(ts),
+        'x-sign': createHmac('sha256', BIND_SECRET).update(`POST|${path}|${ts}|${raw}`).digest('hex'),
+      },
+      body: raw,
+    });
+  };
+  await hmacPost('/api/identity/unbind', { qq_id: QQ }).catch(() => {}); // 清场，可重跑
+
+  const b = await rpLogin({ name: 'oidctest4', password: 'TestPass123' });
+  ok((await b.me.json()).binding === null, '登录后 /api/me 绑定为空（认证中心侧还没绑）');
+
+  // auth 绑定页生成一次性码
+  const bindPage = await req(b.authJar, `${AUTH}/bind`);
+  const bindCsrf = /name="csrf" value="([^"]+)"/.exec(await bindPage.text())?.[1];
+  const gen = await req(b.authJar, `${AUTH}/bind/code`, { method: 'POST', form: { csrf: bindCsrf } });
+  const code = /绑定 (\d{6})/.exec(await gen.text())?.[1];
+  ok(/^\d{6}$/.test(code ?? ''), 'auth 绑定页生成 6 位一次性码');
+  const claim = await hmacPost('/api/bind/claim', { code, qq_id: QQ });
+  const claimBody = await claim.json().catch(() => ({}));
+  ok(claim.status === 200 && claimBody.ok === true && claimBody.displayName === 'oidctest4', '插件视角 claim 成功，回执 displayName', JSON.stringify(claimBody));
+
+  ok((await (await req(b.guessJar, `${GUESS}/api/me`)).json()).binding === null, '绑定后未重登：guess 快照保持旧值（不误删不抢跑）');
+  const sync1 = await rpRelogin(b.guessJar, b.authJar);
+  ok(sync1.cb.status === 302 && (await sync1.me.json()).binding?.qq_id === QQ, '重新登录同步：guess 镜像带出 QQ 绑定');
+
+  const moved = await req(b.guessJar, `${GUESS}/api/bind/new`, { method: 'POST' });
+  ok(moved.status === 400 && (await moved.json()).error === 'bind_moved', 'guess 本站绑定端点已下线（bind_moved）');
+
+  await hmacPost('/api/identity/unbind', { qq_id: QQ });
+  const sync2 = await rpRelogin(b.guessJar, b.authJar);
+  ok((await sync2.me.json()).binding === null, '认证中心解绑后重登：guess 快照清空');
+}
+
 console.log(`\n${fails.length ? `❌ ${fails.length} 项未过 / ` : ''}✅ ${pass} 项断言全过`);
 process.exit(fails.length ? 1 : 0);
-
-// 占位（防引用错误）：rpLogin 返回的 jar 直接挂到返回对象上
-function u1JarHack() { return u1.guessJar; }
-function u2JarHack() { return u2.guessJar; }

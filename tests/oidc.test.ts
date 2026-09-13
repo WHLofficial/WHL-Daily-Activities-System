@@ -52,6 +52,8 @@ interface StubState {
   sid: string;
   idToken?: string;
   tokenStatus?: number;
+  qq?: string | null;
+  userinfoStatus?: number;
   tokenCalls: URLSearchParams[];
 }
 
@@ -61,6 +63,12 @@ async function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   const url = input instanceof URL ? input : new URL(String(input));
   if (url.pathname.endsWith('/jwks.json')) {
     return new Response(JSON.stringify({ keys: [signing.jwk] }), {
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+  if (url.pathname.endsWith('/userinfo')) {
+    if (stub.userinfoStatus) return new Response('boom', { status: stub.userinfoStatus });
+    return new Response(JSON.stringify({ sub: stub.sub, qq: stub.qq ?? null }), {
       headers: { 'content-type': 'application/json' },
     });
   }
@@ -199,7 +207,7 @@ function cookieOf(res: Response, name: string): string | undefined {
 }
 
 /** 完整登录：发起 → 伪 auth 发码 → 回调。返回回调响应与会话 cookie。 */
-async function oidcLogin(env: any, opts?: { sub?: string; sid?: string }) {
+async function oidcLogin(env: any, opts?: { sub?: string; sid?: string; qq?: string | null; userinfoStatus?: number }) {
   const start = await call(env, 'GET', '/api/auth/login');
   expect(start.status).toBe(302);
   const authUrl = new URL(start.headers.get('Location')!);
@@ -211,6 +219,8 @@ async function oidcLogin(env: any, opts?: { sub?: string; sid?: string }) {
     nonce: authUrl.searchParams.get('nonce')!,
     sub: opts?.sub ?? '6',
     sid: opts?.sid ?? 'sid-1',
+    qq: opts?.qq ?? null,
+    userinfoStatus: opts?.userinfoStatus,
     tokenCalls: [],
   };
   const cb = await call(env, 'GET', `/api/auth/callback?code=${stub.code}&state=${authUrl.searchParams.get('state')}&iss=${encodeURIComponent(ISSUER)}`, { cookie: `__Host-guess_oidc=${temp}` });
@@ -399,5 +409,65 @@ describe('统一认证接入（步骤② OIDC RP）', () => {
     expect((await post(await mint(signing, logoutClaims('sid-unknown')))).status).toBe(200);
     const alive = sqlite.prepare("SELECT revoked_at FROM oidc_session WHERE auth_sid = 'sid-bc-2'").get() as any;
     expect(alive?.revoked_at).toBeNull();
+  });
+});
+
+describe('QQ 绑定镜像与端点收口（P0-8）', () => {
+  it('登录快照：userinfo 的 qq 落进本地 user_binding（锚镜像 users.id），/api/me 带出绑定', async () => {
+    vi.stubGlobal('fetch', fakeFetch);
+    const { env, sqlite } = freshEnv(true);
+    const { session } = await oidcLogin(env, { qq: '12345' });
+    const localId = (sqlite.prepare('SELECT id FROM users WHERE tour_id = 6').get() as any).id;
+    expect(sqlite.prepare('SELECT qq_id FROM user_binding WHERE user_id = ?').get(localId)).toEqual({ qq_id: '12345' });
+    const me = await call(env, 'GET', '/api/me', { cookie: `__Host-guess_session=${session}` });
+    expect((await me.json()).binding).toMatchObject({ qq_id: '12345' });
+  });
+
+  it('重登刷新：换绑覆盖同账号单行；userinfo 故障保留旧快照不误删；未绑清残留', async () => {
+    vi.stubGlobal('fetch', fakeFetch);
+    const { env, sqlite } = freshEnv(true);
+    const localId = () => (sqlite.prepare('SELECT id FROM users WHERE tour_id = 6').get() as any).id;
+    const rowsOf = () => sqlite.prepare('SELECT qq_id FROM user_binding WHERE user_id = ?').all(localId()) as any[];
+
+    await oidcLogin(env, { qq: '11111' });
+    await oidcLogin(env, { qq: '22222' }); // 换绑：同账号还是一行
+    expect(rowsOf()).toEqual([{ qq_id: '22222' }]);
+
+    await oidcLogin(env, { qq: '33333', userinfoStatus: 500 }); // userinfo 挂了
+    expect(rowsOf()).toEqual([{ qq_id: '22222' }]);
+
+    await oidcLogin(env, { qq: null }); // 认证中心侧已解绑
+    expect(rowsOf()).toEqual([]);
+  });
+
+  it('陈旧跨用户行：同 QQ 挂在别人名下的旧镜像行，以认证中心为准清掉', async () => {
+    vi.stubGlobal('fetch', fakeFetch);
+    const { env, sqlite } = freshEnv(true);
+    // 预置 user 7 的镜像与一条属于它的旧绑定（迁移前的数据形态）
+    sqlite.prepare(
+      "INSERT INTO users (tour_id, username, display_name, role, password_salt, password_hash) VALUES (7, 'oidctest5', 'oidctest5', 'admin', '', '')",
+    ).run();
+    const staleId = (sqlite.prepare('SELECT id FROM users WHERE tour_id = 7').get() as any).id;
+    sqlite.prepare('INSERT INTO user_binding (user_id, qq_id) VALUES (?, ?)').run(staleId, '12345');
+
+    await oidcLogin(env, { qq: '12345' });
+    const u6 = (sqlite.prepare('SELECT id FROM users WHERE tour_id = 6').get() as any).id;
+    expect(sqlite.prepare('SELECT user_id FROM user_binding WHERE qq_id = ?').get('12345')).toEqual({ user_id: u6 });
+    expect(sqlite.prepare('SELECT qq_id FROM user_binding WHERE user_id = ?').all(staleId)).toEqual([]);
+  });
+
+  it('OIDC 模式下本站绑定端点整体下线：bind/new 与 bind/claim 一律 400 bind_moved', async () => {
+    vi.stubGlobal('fetch', fakeFetch);
+    const { env } = freshEnv(true);
+    const { session } = await oidcLogin(env, { qq: '12345' });
+    const gen = await call(env, 'POST', '/api/bind/new', { cookie: `__Host-guess_session=${session}` });
+    expect(gen.status).toBe(400);
+    expect(await gen.json()).toMatchObject({ error: 'bind_moved' });
+    const claim = await call(env, 'POST', '/api/bind/claim', {
+      cookie: `__Host-guess_session=${session}`,
+      body: { code: '123456', qq_id: '12345' },
+    });
+    expect(claim.status).toBe(400);
+    expect(await claim.json()).toMatchObject({ error: 'bind_moved' });
   });
 });
