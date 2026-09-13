@@ -3,6 +3,7 @@ import {
   api, withBusy, fmtTime, countdown, STATUS_LABEL, STATUS_CLASS, esc, toast,
   TYPE_NAME, TIER_LABEL, CREATE_TYPES, ROLE_NAME, formatContent, roleLabel,
   BATCH_STATUS, PAYOUT_STATUS, statusPill, PASSWORD_FORM, wirePassword, initTopbar,
+  oidcLogin, authCenter, oidcLogout,
 } from './core.js';
 
 const app = document.getElementById('app');
@@ -11,6 +12,17 @@ let view = { tab: 'events', eventId: null };
 
 // ---------- 登录 ----------
 function renderLogin() {
+  // 统一认证模式：一键跳认证中心，回来即已登录
+  if (me?.authMode === 'oidc') {
+    app.innerHTML = `
+      <div class="card auth-card">
+        <h3>登录管理台</h3>
+        <div class="muted">账号由统一认证中心管理。管理员或发起人才能进入管理台。</div>
+        <div class="row mt"><button class="grow" id="li-oidc">去统一认证登录</button></div>
+      </div>`;
+    document.getElementById('li-oidc').onclick = () => oidcLogin();
+    return;
+  }
   app.innerHTML = `
     <div class="card auth-card">
       <h3>登录管理台</h3>
@@ -554,6 +566,8 @@ document.getElementById('nav-logout').onclick = async () => {
     logoutTimer = setTimeout(resetLogout, 5000);
     return;
   }
+  // 统一认证模式：表单 POST 走 302 链，把认证中心的会话一起吊销
+  if (me?.authMode === 'oidc') { oidcLogout(); return; }
   await api('/logout', { method: 'POST' });
   me = null;
   resetLogout();
@@ -563,6 +577,19 @@ document.getElementById('nav-logout').onclick = async () => {
 
 // ---------- 改密码 ----------
 function renderPassword(forced = false) {
+  // 统一认证模式：本站不存密码，改密去认证中心（改完全站生效）
+  if (me?.authMode === 'oidc') {
+    app.innerHTML = `${forced
+      ? '<div class="banner warn">密码刚被重置，请先到认证中心设置新密码，再回来继续。</div>'
+      : '<a class="muted" href="#/">← 返回</a>'}
+      <div class="card">
+        <h3>修改密码</h3>
+        <p class="muted">账号由统一认证中心管理。改完全站（赛事/竞猜/俱乐部）都用新密码。</p>
+        <div class="row mt"><button class="grow" id="pw-oidc">去认证中心改密</button></div>
+      </div>`;
+    document.getElementById('pw-oidc').onclick = () => authCenter(me, '/password');
+    return;
+  }
   app.innerHTML = `${forced
     ? '<div class="banner warn">密码刚被重置，请先设置新密码。改完才能继续用。</div>'
     : '<a class="muted" href="#/">← 返回</a>'}<div class="card">${PASSWORD_FORM}</div>`;

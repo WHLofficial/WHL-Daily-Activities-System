@@ -139,6 +139,20 @@ export function toast(msg, isErr = false) {
   setTimeout(() => { el.classList.remove('show'); setTimeout(() => el.remove(), 300); }, 3000);
 }
 
+// ---------- 统一认证（迁移步骤②，auth 项目 PRD P0-6）----------
+// me.authMode === 'oidc' 时的入口跳转小件：
+// 登录走本站 /api/auth/login（发起 authorize 链，回来即已登录）；注册/改密直达认证中心页面；
+// 登出用隐藏表单 POST——302 链（本站吊销 → 认证中心吊销 → 回本站）只有浏览器导航跟得完，fetch 跟不完。
+export function oidcLogin() { location.href = '/api/auth/login'; }
+export function authCenter(me, path) { location.href = (me?.authHome || '') + path; }
+export function oidcLogout() {
+  const f = document.createElement('form');
+  f.method = 'POST';
+  f.action = '/api/auth/logout';
+  document.body.appendChild(f);
+  f.submit();
+}
+
 // ---------- 顶栏：站外入口与鸣谢弹层 ----------
 // 赛事平台的地址。同主域下和它共享 whl_session，登录态互通：在那边登录过，这边也是登录的。
 export const TOUR_URL = 'https://tour.whleague.win';

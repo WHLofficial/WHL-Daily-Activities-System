@@ -2,6 +2,7 @@
 import {
   api, withBusy, fmtTime, countdown, STATUS_LABEL, STATUS_CLASS, esc, toast,
   TYPE_NAME, TIER_LABEL, WDL_NAME, formatContent, roleLabel, PASSWORD_FORM, wirePassword, initTopbar,
+  oidcLogin, authCenter, oidcLogout,
 } from './core.js';
 
 const app = document.getElementById('app');
@@ -10,6 +11,19 @@ let me = null; // { user, is_initiator, binding }
 // ---------- 登录 / 注册 ----------
 function renderLogin(mode = 'login') {
   const reg = mode === 'register';
+  // 统一认证模式：本站没有账密表单，一键跳认证中心
+  if (me?.authMode === 'oidc') {
+    app.innerHTML = `
+      <div class="card auth-card">
+        <h3>${reg ? '注册账号' : '登录'}</h3>
+        <div class="muted">账号由统一认证中心管理，与赛事系统通用。</div>
+        <div class="row mt"><button class="grow" id="li-oidc">${reg ? '去认证中心注册' : '去统一认证登录'}</button></div>
+        <div class="center muted mt-s">${reg ? '已有账号？' : '还没有账号？'}<a href="#" id="li-sw">${reg ? '去登录' : '注册一个'}</a></div>
+      </div>`;
+    document.getElementById('li-oidc').onclick = () => (reg ? authCenter(me, '/register') : oidcLogin());
+    document.getElementById('li-sw').onclick = (e) => { e.preventDefault(); location.hash = reg ? '#/login' : '#/register'; };
+    return;
+  }
   app.innerHTML = `
     <div class="card auth-card">
       <h3>${reg ? '注册账号' : '登录'}</h3>
@@ -358,6 +372,19 @@ async function renderBind() {
 
 // ---------- 改密码 ----------
 function renderPassword(forced = false) {
+  // 统一认证模式：本站不存密码，改密去认证中心（改完全站生效）
+  if (me?.authMode === 'oidc') {
+    app.innerHTML = `${forced
+      ? '<div class="banner warn">密码刚被重置，请先到认证中心设置新密码，再回来继续。</div>'
+      : '<a class="muted" href="#/">← 返回</a>'}
+      <div class="card">
+        <h3>修改密码</h3>
+        <p class="muted">账号由统一认证中心管理。改完全站（赛事/竞猜/俱乐部）都用新密码。</p>
+        <div class="row mt"><button class="grow" id="pw-oidc">去认证中心改密</button></div>
+      </div>`;
+    document.getElementById('pw-oidc').onclick = () => authCenter(me, '/password');
+    return;
+  }
   app.innerHTML = `${forced
     ? '<div class="banner warn">密码刚被重置，请先设置新密码。改完才能继续用。</div>'
     : '<a class="muted" href="#/">← 返回</a>'}<div class="card">${PASSWORD_FORM}</div>`;
@@ -395,6 +422,8 @@ document.getElementById('nav-logout').onclick = async () => {
     logoutTimer = setTimeout(resetLogout, 5000);
     return;
   }
+  // 统一认证模式：表单 POST 走 302 链，把认证中心的会话一起吊销
+  if (me?.authMode === 'oidc') { oidcLogout(); return; }
   await api('/logout', { method: 'POST' });
   me = null;
   resetLogout();
