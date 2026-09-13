@@ -6,6 +6,8 @@
 // QQ 绑定读写本期仍走本地 user_binding（绑定全流程搬 auth 属 PRD P0-8）。
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import { HttpError } from './http.ts';
+// 运行时才引用（函数声明，无模块求值期依赖）：auth.ts 也反向导入本文件，ESM 环安全
+import { mirrorTourUser } from './auth.ts';
 
 export const OIDC_SESSION_COOKIE = '__Host-guess_session';
 // authorize 跳转前的 state/nonce/verifier 中转（10 分钟寿命，登录完成后即删）
@@ -109,6 +111,42 @@ function jwksFor(issuer: string): ReturnType<typeof createRemoteJWKSet> {
   return jwks;
 }
 
+// QQ 绑定镜像（P0-8）：绑定真源在 auth 的 identity 表，本站在登录回调时用 userinfo 的
+// qq 快照同步本地 user_binding——预测门槛、发奖批量、对账的 JOIN 全部零改动，兼容模式
+// 行为完全等价。登录之后站点外的绑定/解绑变化要等下一次登录才刷进来（OIDC 模式下绑定
+// 入口已移交认证中心，前端指引重登刷新）。userinfo 拉取失败时保留旧快照，不因瞬时故障
+// 误删绑定。本地锚点用镜像 users.id（user_binding 既有外键语义）。
+async function mirrorBinding(env: any, sub: string, accessToken: string): Promise<void> {
+  try {
+    const tour = await env.TOUR_DB.prepare('SELECT id, name, role FROM user WHERE id = ?').bind(Number(sub)).first();
+    if (!tour) return;
+    const local = await mirrorTourUser(env, tour);
+    const ui = await fetch(`${env.OIDC_ISSUER}/userinfo`, {
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+    if (!ui.ok) return;
+    const info = (await ui.json().catch(() => null)) as { qq?: unknown } | null;
+    const qq = typeof info?.qq === 'string' && info.qq ? info.qq : null;
+    if (qq) {
+      await env.DB.batch([
+        // auth 已保证 QQ 全局唯一；本地镜像若残留同 QQ 挂在别人名下的旧行（迁移前旧数据），
+        // 以认证中心为准清掉
+        env.DB.prepare('DELETE FROM user_binding WHERE qq_id = ? AND user_id != ?').bind(qq, local.id),
+        env.DB.prepare(
+          `INSERT INTO user_binding (user_id, qq_id, bound_at) VALUES (?, ?, datetime('now'))
+             ON CONFLICT(user_id) DO UPDATE SET qq_id = excluded.qq_id,
+               bound_at = CASE WHEN user_binding.qq_id != excluded.qq_id
+                               THEN excluded.bound_at ELSE user_binding.bound_at END`,
+        ).bind(local.id, qq),
+      ]);
+    } else {
+      await env.DB.prepare('DELETE FROM user_binding WHERE user_id = ?').bind(local.id).run();
+    }
+  } catch (e: any) {
+    console.error('[oidc] binding mirror failed:', e?.message || e);
+  }
+}
+
 // ---------- 四端点（api.ts 在认证段前分发；不受改密门拦截） ----------
 
 export async function handleOidc(env: any, request: Request, seg: string[], method: string): Promise<Response | null> {
@@ -169,7 +207,9 @@ export async function handleOidc(env: any, request: Request, seg: string[], meth
         code_verifier: temp.verifier,
       }),
     });
-    const tokens = tokenRes.ok ? ((await tokenRes.json().catch(() => null)) as { id_token?: unknown } | null) : null;
+    const tokens = tokenRes.ok
+      ? ((await tokenRes.json().catch(() => null)) as { id_token?: unknown; access_token?: unknown } | null)
+      : null;
     if (!tokens || typeof tokens.id_token !== 'string') {
       throw new HttpError(502, '认证中心换票失败，请稍后重试', 'oidc_token_error');
     }
@@ -203,6 +243,7 @@ export async function handleOidc(env: any, request: Request, seg: string[], meth
     ).bind(await sha256hex(token), payload.sub, payload.sid, now,
       new Date(Date.now() + SESSION_TTL_SECONDS * 1000).toISOString()).run();
 
+    await mirrorBinding(env, payload.sub, String(tokens.access_token));
     return redirect('/', sessionCookie(token), clearCookie(OIDC_TEMP_COOKIE));
   }
 

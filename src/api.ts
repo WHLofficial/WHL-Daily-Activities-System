@@ -151,6 +151,11 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
   };
 
   try {
+    // QQ 绑定收口（auth 项目 PRD P0-8）：绑定真源在认证中心 identity 表，OIDC 模式下
+    // 本站绑定端点整体下线（fail-fast，防插件误配把本地镜像表写成分叉状态）；兼容模式不受影响
+    if (isOidc(env) && method === 'POST' && seg[0] === 'bind') {
+      throw new HttpError(400, 'QQ 绑定已迁移到统一认证中心，请到认证中心操作', 'bind_moved');
+    }
     if (!env.SYNC_SECRET && (seg[0] === 'bind' || seg[0] === 'reports' || seg[0] === 'internal')) {
       throw new HttpError(500, '服务端未配置 SYNC_SECRET');
     }
