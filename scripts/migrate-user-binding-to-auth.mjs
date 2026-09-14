@@ -8,12 +8,15 @@
 //   node scripts/migrate-user-binding-to-auth.mjs           # 读本地库（联调预演）
 //   node scripts/migrate-user-binding-to-auth.mjs --remote  # 读线上竞猜库（正式切换）
 //
-// 正式切换步骤（TECH_DESIGN §9 步骤②切 guess 当天）：
+// 正式切换步骤（TECH_DESIGN §9 步骤②切 guess 当天）——顺序不可颠倒，1、2 未完成禁止做 3：
 //   1) 本脚本 --remote 跑一遍，把输出的 SQL 用
 //      `npx wrangler d1 execute whl-auth --remote --command "$SQL"` 灌入 auth 库
-//   2) 核对脚本末尾附的对账 SQL 两侧计数一致
+//   2) 对账：auth identity 行数必须等于竞猜 user_binding 行数（对账 SQL 见脚本末尾），不一致先查清
 //   3) 插件配置 bind_claim_url + bind_secret，guess 开 OIDC_* 环境变量
-// 脚本可重复执行：INSERT ... ON CONFLICT DO NOTHING，重复灌入不产生重复行。
+// 为什么必须先迁移：guess 登录时拿 /userinfo 的 qq 覆盖本地绑定（src/_lib/oidc.ts 的 mirrorBinding），
+// 真源为空时 qq=null 会被当成「用户已解绑」而 DELETE 掉本地行。2026-09-14 生产踩过：
+// identity 为空时切了 OIDC，WH 自己的绑定被自己的一次登录删掉（已回填恢复）。
+// 脚本可重复执行：INSERT ... WHERE NOT EXISTS（双向唯一），重复灌入不产生重复行。
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -48,6 +51,30 @@ if (rows.length === 0) {
 }
 
 const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
+// 竞猜库 bound_at 是 SQLite datetime('now') 的 "YYYY-MM-DD HH:MM:SS"（UTC），auth 侧统一存
+// nowIso() 的 ISO8601，转一下让绑定页显示与后续新绑定同口径
+const iso = (s) => {
+  const t = String(s);
+  return t.includes('T') ? t : `${t.replace(' ', 'T')}Z`;
+};
+
+// 双向唯一：auth 的 UNIQUE 只覆盖 (provider, provider_uid)，同一账号在中心改绑过就会留下第二行，
+// 所以该 QQ 或该账号任一侧已存在时整行跳过（WHERE NOT EXISTS 覆盖两个轴，也让脚本可重复执行）。
+const stmts = [];
+let skipped = 0;
+for (const r of rows) {
+  const id = Number(r.tour_id);
+  if (!Number.isInteger(id)) {
+    skipped += 1;
+    continue;
+  }
+  const qq = q(r.qq_id);
+  const ts = q(iso(r.bound_at));
+  stmts.push(
+    `INSERT INTO identity (account_id, provider, provider_uid, verified_at, bound_at) SELECT ${id}, 'qq', ${qq}, ${ts}, ${ts} WHERE NOT EXISTS (SELECT 1 FROM identity WHERE provider = 'qq' AND (provider_uid = ${qq} OR account_id = ${id}));`,
+  );
+}
+if (skipped > 0) console.error(`⚠ ${skipped} 行 tour_id 非整数，已跳过，请人工核对`);
 
 // stdout 只输出一行可执行 SQL（Windows 下 wrangler --command 传多行会被截断，
 // 与 seed 脚本同一约定）；说明与对账语句全走 stderr

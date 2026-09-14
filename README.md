@@ -68,6 +68,8 @@ node scripts/smoke-oidc-local.mjs                        # 双服务联调（19 
 
 OIDC 模式行为变化：登录/注册/改密入口 302 移交认证中心（直写赛事库的旧代码不再可达）；本地 30 天会话退役，改用 7 天 OIDC 会话（`__Host-guess_session`）；QQ 绑定读写本期仍走本地 `user_binding`（绑定全流程搬认证中心属 PRD P0-8，届时执行 user_binding → auth.identity 迁移）；auth 主动登出会经 back-channel 通知本站按 sid 吊销会话。
 
+> **⚠ 编排硬闸门（2026-09-14 生产事故后立规）**：`scripts/migrate-user-binding-to-auth.mjs` 的迁移**必须先于**打开 `OIDC_ISSUER`/`OIDC_CLIENT_ID`，并核对 auth `identity` 行数 = 本站 `user_binding` 行数，不一致就别切。OIDC 模式下每次登录都用 `/userinfo` 的 `qq` 覆盖本地绑定（`src/_lib/oidc.ts` 的 `mirrorBinding`），真源为空时 `qq=null` 会被当成「用户已解绑」而 `DELETE` 本地行——事故当天就是 identity 为空就切了 OIDC，管理员自己的绑定被自己的一次登录删掉。
+
 ## 部署（首次）
 
 > 保姆级分步指南（含验证点/验收清单/故障排查）见 **[docs/DEPLOY.md](./docs/DEPLOY.md)**，以下为速查版。
