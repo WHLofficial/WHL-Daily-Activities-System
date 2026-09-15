@@ -12,9 +12,10 @@ import { mirrorClaimsUser, parseOidcClaims } from './auth.ts';
 export const OIDC_SESSION_COOKIE = '__Host-guess_session';
 // authorize 跳转前的 state/nonce/verifier 中转（10 分钟寿命，登录完成后即删）
 export const OIDC_TEMP_COOKIE = '__Host-guess_oidc';
-// 静默同步探测（prompt=none，进站即探测）的冷却标记：无会话访客 10 分钟内不重复探测
+// 静默同步探测（prompt=none，进站即探测）的冷却标记：无会话访客 60 秒内不重复探测
+// （60 秒足够打断「探测→回跳→再探测」循环；取长会摁住「别处刚登录回来」的同步）
 export const OIDC_PROBE_COOKIE = '__Host-guess_probe';
-const PROBE_COOLDOWN_SECONDS = 600;
+const PROBE_COOLDOWN_SECONDS = 60;
 // 对齐 auth 会话 7 天（TECH_DESIGN §8-6：client 本地会话 ≤ auth 会话；退役旧 30 天口径）
 export const SESSION_TTL_SECONDS = 7 * 24 * 3600;
 // 兼容模式下若有人点了 OIDC 入口（理论不可达），回赛事系统老路
@@ -106,13 +107,23 @@ function redirect(status302: string, ...setCookies: string[]): Response {
 /** 进站即探测钩子（index.ts 在静态资源前调用）：匿名 HTML 导航 → 302 /api/auth/sync，
  *  让认证中心里已有的会话无感同步到本站。放行条件（返回 null 走静态资源）：
  *  非 OIDC 模式 / 非 HTML 导航请求（Accept 无 text/html，或路径带扩展名且非 .html）/
- *  已有本站会话 / 在探测冷却期。放行判定保持极轻，静态资源请求零开销。 */
-export function silentSyncRedirect(env: any, request: Request, url: URL): Response | null {
+ *  本站会话仍有效 / 在探测冷却期。带会话 cookie 的 HTML 导航会查一次 oidc_session：
+ *  back-channel 登出只撤 D1 行、撤不掉浏览器 cookie，行已不在 = stale 会话，
+ *  清掉 cookie 并照常探测（否则登出后最长 7 天探测被 stale cookie 摁死）。 */
+export async function silentSyncRedirect(env: any, request: Request, url: URL): Promise<Response | null> {
   if (!isOidc(env)) return null;
   if (!(request.headers.get('Accept') || '').includes('text/html')) return null;
   const path = url.pathname;
   if (!path.endsWith('.html') && path.includes('.')) return null;
-  if (getCookie(request, OIDC_SESSION_COOKIE) || getCookie(request, OIDC_PROBE_COOKIE)) return null;
+  if (getCookie(request, OIDC_PROBE_COOKIE)) return null;
+  const sessionToken = getCookie(request, OIDC_SESSION_COOKIE);
+  if (sessionToken) {
+    const row = await env.DB.prepare(
+      'SELECT 1 AS ok FROM oidc_session WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?',
+    ).bind(await sha256hex(sessionToken), new Date().toISOString()).first() as unknown;
+    if (row) return null;
+    return redirect(`/api/auth/sync?back=${encodeURIComponent(path + url.search)}`, clearCookie(OIDC_SESSION_COOKIE));
+  }
   return redirect(`/api/auth/sync?back=${encodeURIComponent(path + url.search)}`);
 }
 

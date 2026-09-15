@@ -564,26 +564,38 @@ describe('静默同步探测（prompt=none，进站即探测）', () => {
     expect(cb.headers.get('Location')).toBe('/');
   });
 
-  it('进站钩子：匿名 HTML 导航→302 sync；有会话/冷却中/非导航请求全部放行', async () => {
-    const { env } = freshEnv(true);
+  it('进站钩子：匿名 HTML 导航→302 sync；有效会话/冷却中/非导航请求全部放行', async () => {
+    vi.stubGlobal('fetch', fakeFetch);
+    const { env, sqlite } = freshEnv(true);
     const htmlNav = new Request('http://localhost/', { headers: { accept: 'text/html,application/xhtml+xml' } });
-    const probe = silentSyncRedirect(env, htmlNav, new URL('http://localhost/'));
+    const probe = await silentSyncRedirect(env, htmlNav, new URL('http://localhost/'));
     expect(probe?.status).toBe(302);
     expect(probe?.headers.get('Location')).toBe('/api/auth/sync?back=%2F');
+    // 探测冷却标记 60 秒（temp 中转仍是 600，别改错对象）
+    const sync = await call(env, 'GET', '/api/auth/sync?back=%2F');
+    const probeSc = sync.headers.getSetCookie().find((l) => l.startsWith('__Host-guess_probe='));
+    expect(probeSc).toContain('Max-Age=60');
 
     // 已在冷却期 → 放行
     const probing = new Request('http://localhost/', { headers: { accept: 'text/html', cookie: '__Host-guess_probe=1' } });
-    expect(silentSyncRedirect(env, probing, new URL('http://localhost/'))).toBeNull();
-    // 已有本站会话 → 放行
-    const logged = new Request('http://localhost/', { headers: { accept: 'text/html', cookie: '__Host-guess_session=tok' } });
-    expect(silentSyncRedirect(env, logged, new URL('http://localhost/'))).toBeNull();
+    expect(await silentSyncRedirect(env, probing, new URL('http://localhost/'))).toBeNull();
+    // 已有本站会话（D1 行存活）→ 放行
+    const live = await oidcLogin(env);
+    const logged = new Request('http://localhost/', { headers: { accept: 'text/html', cookie: `__Host-guess_session=${live.session}` } });
+    expect(await silentSyncRedirect(env, logged, new URL('http://localhost/'))).toBeNull();
+    // stale 会话（D1 行已撤销）→ 照常探测 + 清掉无效 cookie（登出后 7 天内照样能同步）
+    sqlite.prepare("UPDATE oidc_session SET revoked_at = '2020-01-01T00:00:00.000Z'").run();
+    const stale = await silentSyncRedirect(env, logged, new URL('http://localhost/'));
+    expect(stale?.status).toBe(302);
+    expect(stale?.headers.get('Location')).toBe('/api/auth/sync?back=%2F');
+    expect(stale?.headers.getSetCookie().find((l) => l.startsWith('__Host-guess_session='))).toMatch(/^__Host-guess_session=;/);
     // 静态资源（无 text/html 或带扩展名且非 .html）→ 放行
     const asset = new Request('http://localhost/app.js', { headers: { accept: '*/*' } });
-    expect(silentSyncRedirect(env, asset, new URL('http://localhost/app.js'))).toBeNull();
+    expect(await silentSyncRedirect(env, asset, new URL('http://localhost/app.js'))).toBeNull();
     const htmlAsset = new Request('http://localhost/admin.html', { headers: { accept: 'text/html' } });
-    expect(silentSyncRedirect(env, htmlAsset, new URL('http://localhost/admin.html'))?.status).toBe(302);
+    expect((await silentSyncRedirect(env, htmlAsset, new URL('http://localhost/admin.html')))?.status).toBe(302);
     // 兼容模式（未配 OIDC_*）→ 放行
     const { env: sharedEnv } = freshEnv(false);
-    expect(silentSyncRedirect(sharedEnv, htmlNav, new URL('http://localhost/'))).toBeNull();
+    expect(await silentSyncRedirect(sharedEnv, htmlNav, new URL('http://localhost/'))).toBeNull();
   });
 });

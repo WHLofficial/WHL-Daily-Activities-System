@@ -16,7 +16,7 @@ export default {
       return handleApi({ request, env, waitUntil: (p: Promise<any>) => ctx.waitUntil(p) });
     }
     // 进站即探测：认证中心已有会话的访客，首次打开页面无感同步登录态（prompt=none，永不弹页）
-    const sync = silentSyncRedirect(env, request, url);
+    const sync = await silentSyncRedirect(env, request, url);
     if (sync) return sync;
     return env.ASSETS.fetch(request);
   },
