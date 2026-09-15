@@ -12,7 +12,10 @@
     "directory": "./public",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    // 全量 worker-first：进站探测闸门（index.ts silentSyncRedirect）必须见到 HTML 导航
+    // 才能工作；只放 /api/* 的话页面请求边缘直吐资源不进 worker，探测是死代码。
+    // worker 内非 /api 路径原样 ASSETS.fetch 透传，行为等价，代价是静态请求也走一次 worker
+    "run_worker_first": true
   },
   "d1_databases": [
     {
