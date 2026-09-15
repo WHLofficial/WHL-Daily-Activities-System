@@ -12,6 +12,9 @@ import { mirrorClaimsUser, parseOidcClaims } from './auth.ts';
 export const OIDC_SESSION_COOKIE = '__Host-guess_session';
 // authorize 跳转前的 state/nonce/verifier 中转（10 分钟寿命，登录完成后即删）
 export const OIDC_TEMP_COOKIE = '__Host-guess_oidc';
+// 静默同步探测（prompt=none，进站即探测）的冷却标记：无会话访客 10 分钟内不重复探测
+export const OIDC_PROBE_COOKIE = '__Host-guess_probe';
+const PROBE_COOLDOWN_SECONDS = 600;
 // 对齐 auth 会话 7 天（TECH_DESIGN §8-6：client 本地会话 ≤ auth 会话；退役旧 30 天口径）
 export const SESSION_TTL_SECONDS = 7 * 24 * 3600;
 // 兼容模式下若有人点了 OIDC 入口（理论不可达），回赛事系统老路
@@ -100,6 +103,19 @@ function redirect(status302: string, ...setCookies: string[]): Response {
   return new Response(null, { status: 302, headers });
 }
 
+/** 进站即探测钩子（index.ts 在静态资源前调用）：匿名 HTML 导航 → 302 /api/auth/sync，
+ *  让认证中心里已有的会话无感同步到本站。放行条件（返回 null 走静态资源）：
+ *  非 OIDC 模式 / 非 HTML 导航请求（Accept 无 text/html，或路径带扩展名且非 .html）/
+ *  已有本站会话 / 在探测冷却期。放行判定保持极轻，静态资源请求零开销。 */
+export function silentSyncRedirect(env: any, request: Request, url: URL): Response | null {
+  if (!isOidc(env)) return null;
+  if (!(request.headers.get('Accept') || '').includes('text/html')) return null;
+  const path = url.pathname;
+  if (!path.endsWith('.html') && path.includes('.')) return null;
+  if (getCookie(request, OIDC_SESSION_COOKIE) || getCookie(request, OIDC_PROBE_COOKIE)) return null;
+  return redirect(`/api/auth/sync?back=${encodeURIComponent(path + url.search)}`);
+}
+
 // JWKS 客户端按 issuer 缓存（jose 自带刷新冷却与 kid 命中）
 const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 function jwksFor(issuer: string): ReturnType<typeof createRemoteJWKSet> {
@@ -151,8 +167,14 @@ export async function handleOidc(env: any, request: Request, seg: string[], meth
   // 生产是 https://guess.whleague.win，无需配置
   const origin = env.OIDC_REDIRECT_ORIGIN || url.origin;
 
-  // 发起登录：PKCE S256 + state/nonce 中转 10 分钟
-  if (method === 'GET' && seg[1] === 'login' && seg.length === 2) {
+/** 只接受站内相对路径，防开放跳转与头部注入（静默探测的回跳地址） */
+function safeReturn(v: unknown): string {
+  if (typeof v !== 'string' || !v.startsWith('/') || v.startsWith('//') || v.includes('\\') || /[\r\n\t]/.test(v)) return '/';
+  return v.slice(0, 512);
+}
+
+// 发起登录：PKCE S256 + state/nonce 中转 10 分钟
+if (method === 'GET' && seg[1] === 'login' && seg.length === 2) {
     if (!isOidc(env)) return redirect(TOUR_HOME);
     const state = randomB64url(16);
     const nonce = randomB64url(16);
@@ -170,6 +192,33 @@ export async function handleOidc(env: any, request: Request, seg: string[], meth
     return redirect(`${env.OIDC_ISSUER}/authorize?${q}`, `${OIDC_TEMP_COOKIE}=${b64urlEncode(JSON.stringify({ state, nonce, verifier }))}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`);
   }
 
+  // 静默同步探测（进站即探测，auth 支持 prompt=none 后启用）：index.ts 的进站钩子把
+  // 匿名 HTML 导航引到这里，带 prompt=none 去 auth——有会话即静默拿码自动登录；
+  // 没有则 auth 原路回 error=login_required，callback 分支原样送回来源页继续匿名。
+  // 冷却标记 10 分钟，防无会话访客被反复拽去认证中心。
+  if (method === 'GET' && seg[1] === 'sync' && seg.length === 2) {
+    if (!isOidc(env)) return redirect(TOUR_HOME);
+    const state = randomB64url(16);
+    const nonce = randomB64url(16);
+    const verifier = randomB64url(32);
+    const q = new URLSearchParams({
+      response_type: 'code',
+      client_id: env.OIDC_CLIENT_ID,
+      redirect_uri: `${origin}/api/auth/callback`,
+      scope: 'openid profile',
+      state,
+      nonce,
+      code_challenge: await pkceChallenge(verifier),
+      code_challenge_method: 'S256',
+      prompt: 'none',
+    });
+    return redirect(
+      `${env.OIDC_ISSUER}/authorize?${q}`,
+      `${OIDC_TEMP_COOKIE}=${b64urlEncode(JSON.stringify({ state, nonce, verifier, returnTo: safeReturn(url.searchParams.get('back')) }))}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`,
+      `${OIDC_PROBE_COOKIE}=1; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${PROBE_COOLDOWN_SECONDS}`,
+    );
+  }
+
   // 回调建会话：换票 + 验签 + 建 oidc_session
   if (method === 'GET' && seg[1] === 'callback' && seg.length === 2) {
     if (!isOidc(env)) throw new HttpError(404, '未知接口');
@@ -178,7 +227,7 @@ export async function handleOidc(env: any, request: Request, seg: string[], meth
     if (iss !== null && iss !== env.OIDC_ISSUER) throw new HttpError(400, '登录响应来源不对，请重新登录', 'oidc_iss_mismatch');
 
     const tempRaw = getCookie(request, OIDC_TEMP_COOKIE);
-    let temp: { state?: unknown; nonce?: unknown; verifier?: unknown } | null = null;
+    let temp: { state?: unknown; nonce?: unknown; verifier?: unknown; returnTo?: unknown } | null = null;
     try { temp = JSON.parse(b64urlDecode(tempRaw ?? '')); } catch { /* 走下面的统一校验 */ }
     if (
       !temp || typeof temp.state !== 'string' || typeof temp.nonce !== 'string' || typeof temp.verifier !== 'string' ||
@@ -187,6 +236,11 @@ export async function handleOidc(env: any, request: Request, seg: string[], meth
       throw new HttpError(400, '登录状态已失效，请重新登录', 'oidc_state_invalid');
     }
     const code = url.searchParams.get('code');
+    // prompt=none 静默探测的预期分支：auth 无会话回 error，不出错页、原路送回来源页继续匿名
+    // （探测永不出交互页；真正要交互的场景由用户手动点登录走完整链路）
+    if (!code && url.searchParams.has('error')) {
+      return redirect(safeReturn(temp.returnTo), clearCookie(OIDC_TEMP_COOKIE));
+    }
     if (!code) throw new HttpError(400, '登录被取消或未完成，请重试', 'oidc_no_code');
 
     // code 换票（公开 client，无 secret，凭 PKCE 自证）；非 200 一律 502，不向用户区分细节
@@ -247,7 +301,7 @@ export async function handleOidc(env: any, request: Request, seg: string[], meth
       new Date(Date.now() + SESSION_TTL_SECONDS * 1000).toISOString()).run();
 
     await mirrorBinding(env, payload.sub, info as { qq?: unknown; name: string; roles: string[] });
-    return redirect('/', sessionCookie(token), clearCookie(OIDC_TEMP_COOKIE));
+    return redirect(safeReturn(temp.returnTo), sessionCookie(token), clearCookie(OIDC_TEMP_COOKIE));
   }
 
   // 登出：先吊销本地行，浏览器再跳认证中心 end_session（302 链由浏览器跟随）

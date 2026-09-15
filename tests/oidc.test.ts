@@ -10,7 +10,7 @@ import { createHash } from 'node:crypto';
 import { exportJWK, generateKeyPair, SignJWT, type JWTPayload } from 'jose';
 import { handleApi } from '../src/api.ts';
 import { tourHashPassword } from '../src/_lib/tourcrypto.ts';
-import { BACKCHANNEL_LOGOUT_EVENT } from '../src/_lib/oidc.ts';
+import { BACKCHANNEL_LOGOUT_EVENT, b64urlDecode, silentSyncRedirect } from '../src/_lib/oidc.ts';
 
 const ISSUER = 'https://auth.example';
 const CLIENT_ID = 'guess';
@@ -507,5 +507,83 @@ describe('QQ 绑定镜像与端点收口（P0-8）', () => {
     });
     expect(claim.status).toBe(400);
     expect(await claim.json()).toMatchObject({ error: 'bind_moved' });
+  });
+});
+
+describe('静默同步探测（prompt=none，进站即探测）', () => {
+  /** 走 sync 端点拿 authorize 跳转与 temp/probe cookie（stub 由用例自行布） */
+  async function startSync(env: any, back = '/leaderboard') {
+    const start = await call(env, 'GET', `/api/auth/sync?back=${encodeURIComponent(back)}`);
+    expect(start.status).toBe(302);
+    const authUrl = new URL(start.headers.get('Location')!);
+    expect(authUrl.origin).toBe(ISSUER);
+    expect(authUrl.searchParams.get('prompt')).toBe('none');
+    expect(authUrl.searchParams.get('redirect_uri')).toBe('http://localhost/api/auth/callback');
+    return { authUrl, temp: cookieOf(start, '__Host-guess_oidc'), probe: cookieOf(start, '__Host-guess_probe') };
+  }
+
+  it('sync 端点：带 prompt=none 发起，temp 存 returnTo，种 10 分钟冷却标记', async () => {
+    const { env } = freshEnv(true);
+    const { authUrl, temp, probe } = await startSync(env);
+    expect(authUrl.searchParams.get('response_type')).toBe('code');
+    expect(authUrl.searchParams.get('code_challenge_method')).toBe('S256');
+    expect(temp).toBeTruthy();
+    expect(JSON.parse(b64urlDecode(temp!)).returnTo).toBe('/leaderboard');
+    expect(probe).toBe('1');
+  });
+
+  it('auth 无会话回 error=login_required：原路送回来源页继续匿名，不出错页', async () => {
+    const { env } = freshEnv(true);
+    const { authUrl, temp } = await startSync(env);
+    const cb = await call(env, 'GET', `/api/auth/callback?error=login_required&state=${authUrl.searchParams.get('state')}&iss=${encodeURIComponent(ISSUER)}`, { cookie: `__Host-guess_oidc=${temp}` });
+    expect(cb.status).toBe(302);
+    expect(cb.headers.get('Location')).toBe('/leaderboard');
+    expect(cookieOf(cb, '__Host-guess_oidc')).toBe(''); // temp 应清除（Max-Age=0 的空值行）
+    expect(cookieOf(cb, '__Host-guess_session')).toBeUndefined(); // 不应建会话
+  });
+
+  it('auth 有会话：探测拿码静默登录，且回跳到来源页', async () => {
+    vi.stubGlobal('fetch', fakeFetch);
+    const { env } = freshEnv(true);
+    const { authUrl, temp } = await startSync(env);
+    stub = { code: 'CODE-1', challenge: authUrl.searchParams.get('code_challenge')!, nonce: authUrl.searchParams.get('nonce')!, sub: '6', sid: 'sid-1', tokenCalls: [] };
+    const cb = await call(env, 'GET', `/api/auth/callback?code=${stub.code}&state=${authUrl.searchParams.get('state')}&iss=${encodeURIComponent(ISSUER)}`, { cookie: `__Host-guess_oidc=${temp}` });
+    expect(cb.status).toBe(302);
+    expect(cb.headers.get('Location')).toBe('/leaderboard');
+    expect(cookieOf(cb, '__Host-guess_session')).toBeTruthy();
+  });
+
+  it('back 非站内相对路径：一律回退 /，开放跳转进不来', async () => {
+    vi.stubGlobal('fetch', fakeFetch);
+    const { env } = freshEnv(true);
+    const { authUrl, temp } = await startSync(env, 'https://evil.example/x');
+    expect(JSON.parse(b64urlDecode(temp!)).returnTo).toBe('/');
+    stub = { code: 'CODE-1', challenge: authUrl.searchParams.get('code_challenge')!, nonce: authUrl.searchParams.get('nonce')!, sub: '6', sid: 'sid-2', tokenCalls: [] };
+    const cb = await call(env, 'GET', `/api/auth/callback?code=${stub.code}&state=${authUrl.searchParams.get('state')}&iss=${encodeURIComponent(ISSUER)}`, { cookie: `__Host-guess_oidc=${temp}` });
+    expect(cb.status).toBe(302);
+    expect(cb.headers.get('Location')).toBe('/');
+  });
+
+  it('进站钩子：匿名 HTML 导航→302 sync；有会话/冷却中/非导航请求全部放行', async () => {
+    const { env } = freshEnv(true);
+    const htmlNav = new Request('http://localhost/', { headers: { accept: 'text/html,application/xhtml+xml' } });
+    const probe = silentSyncRedirect(env, htmlNav, new URL('http://localhost/'));
+    expect(probe?.status).toBe(302);
+    expect(probe?.headers.get('Location')).toBe('/api/auth/sync?back=%2F');
+
+    // 已在冷却期 → 放行
+    const probing = new Request('http://localhost/', { headers: { accept: 'text/html', cookie: '__Host-guess_probe=1' } });
+    expect(silentSyncRedirect(env, probing, new URL('http://localhost/'))).toBeNull();
+    // 已有本站会话 → 放行
+    const logged = new Request('http://localhost/', { headers: { accept: 'text/html', cookie: '__Host-guess_session=tok' } });
+    expect(silentSyncRedirect(env, logged, new URL('http://localhost/'))).toBeNull();
+    // 静态资源（无 text/html 或带扩展名且非 .html）→ 放行
+    const asset = new Request('http://localhost/app.js', { headers: { accept: '*/*' } });
+    expect(silentSyncRedirect(env, asset, new URL('http://localhost/app.js'))).toBeNull();
+    const htmlAsset = new Request('http://localhost/admin.html', { headers: { accept: 'text/html' } });
+    expect(silentSyncRedirect(env, htmlAsset, new URL('http://localhost/admin.html'))?.status).toBe(302);
+    // 兼容模式（未配 OIDC_*）→ 放行
+    const { env: sharedEnv } = freshEnv(false);
+    expect(silentSyncRedirect(sharedEnv, htmlNav, new URL('http://localhost/'))).toBeNull();
   });
 });

@@ -6,6 +6,7 @@ import { handleApi, runRecon } from './api';
 import { dispatchPending } from './_lib/sync';
 import { sendDueReminders } from './_lib/notify';
 import { sealExpiredEvents } from './_lib/seal';
+import { silentSyncRedirect } from './_lib/oidc';
 
 export default {
   async fetch(request: Request, env: any, ctx: any): Promise<Response> {
@@ -14,6 +15,9 @@ export default {
       // waitUntil 透传给 API 层：发奖同步这类慢外呼转后台跑，响应立即返回
       return handleApi({ request, env, waitUntil: (p: Promise<any>) => ctx.waitUntil(p) });
     }
+    // 进站即探测：认证中心已有会话的访客，首次打开页面无感同步登录态（prompt=none，永不弹页）
+    const sync = silentSyncRedirect(env, request, url);
+    if (sync) return sync;
     return env.ASSETS.fetch(request);
   },
 
