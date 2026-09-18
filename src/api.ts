@@ -7,7 +7,7 @@ import {
   getAuthUser, requireUser, requireRole, requireManager, requireAdminPerm, isInitiator, verifyPluginRequest, assertCronKey,
   rateLimit, mirrorTourUser, requirePwChanged,
 } from './_lib/auth.ts';
-import { sha256Hex, tourHashPassword, tourVerifyPassword } from './_lib/tourcrypto.ts';
+import { tourVerifyPassword } from './_lib/tourcrypto.ts'; // 仅 login 兼容分支用（赛事库只读）
 import { computeSettlement, wdlOf, type ResultInput } from './_lib/judge.ts';
 import { dispatchPending, signAndFetch } from './_lib/sync.ts';
 import { buildReportText } from './_lib/report.ts';
@@ -220,85 +220,18 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
       (method === 'POST' && (seg[0] === 'login' || seg[0] === 'register' || seg[0] === 'logout' || seg[0] === 'password')) ||
       (method === 'GET' && seg[0] === 'me');
     if (!pwGate) await requirePwChanged(env, request);
-    // 注册：账号真源在赛事系统 user 表（写入即全站通用），校验规则与赛事系统 /register 逐字一致。
-    // 门槛与赛事系统同一套：注册码优先；无码需组织 allow_open_reg 开关放开，产生 locked=1 观众号。
+    // 注册：收口到认证中心（增量 9D 残留清理：兼容模式直写赛事库 user 表的分支已删，
+    // 账号真源只在 auth；兼容模式下本端点返回 410，注册走认证中心）
     if (method === 'POST' && seg[0] === 'register') {
-      // OIDC 模式：注册入口移交认证中心（直写赛事库的注册代码步骤③才彻底删除，本模式下不再可达）
       if (isOidc(env)) return Response.redirect(`${env.OIDC_ISSUER}/register`, 302);
-      if (!env.TOUR_DB) throw new HttpError(500, '未配置赛事库');
-      const ip = request.headers.get('CF-Connecting-IP') || 'local';
-      if (!(await rateLimit(env, `reg:${ip}`, 5, 3600))) throw new HttpError(429, '注册太频繁，请一小时后再试');
-      const body = await readBody(request);
-      const name = String(body.name ?? '').trim();
-      const password = String(body.password ?? '');
-      if (name.length < 1 || name.length > 32) throw new HttpError(400, '昵称需要 1-32 个字符');
-      if (password.length < 8 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
-        throw new HttpError(400, '密码至少 8 位，且要同时包含字母和数字');
-      }
-      const email = String(body.email ?? '').trim() || null;
-      if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new HttpError(400, '邮箱格式不对');
-
-      let locked = 0;
-      const code = String(body.signupCode ?? '').trim();
-      if (code) {
-        const sc = await env.TOUR_DB.prepare(
-          'SELECT id, expires_at, max_uses, used_count FROM signup_code WHERE code_hash = ?',
-        ).bind(await sha256Hex(code)).first() as any;
-        if (!sc) throw new HttpError(400, '注册码无效');
-        if (sc.expires_at && sc.expires_at < nowISO()) throw new HttpError(400, '注册码已过期');
-        if (sc.max_uses !== null && sc.used_count >= sc.max_uses) throw new HttpError(400, '注册码已用完');
-      } else {
-        const org = await env.TOUR_DB.prepare('SELECT allow_open_reg FROM organization WHERE id = 1').first() as any;
-        if (!org?.allow_open_reg) throw new HttpError(400, '需要注册码');
-        locked = 1;
-      }
-
-      const dup = await env.TOUR_DB.prepare('SELECT id FROM user WHERE name = ?').bind(name).first();
-      if (dup) throw new HttpError(409, '这个昵称已被占用');
-
-      if (code) {
-        // 原子核销（与赛事系统同款守卫条件），防并发多用
-        const upd = await env.TOUR_DB.prepare(
-          'UPDATE signup_code SET used_count = used_count + 1 WHERE code_hash = ? AND (max_uses IS NULL OR used_count < max_uses) AND (expires_at IS NULL OR expires_at > ?)',
-        ).bind(await sha256Hex(code), nowISO()).run();
-        if (upd.meta.changes !== 1) throw new HttpError(400, '注册码无效或已用完');
-      }
-
-      let tourId: number;
-      try {
-        const ins = await env.TOUR_DB.prepare(
-          "INSERT INTO user (name, email, password_hash, role, locked) VALUES (?, ?, ?, 'coach', ?)",
-        ).bind(name, email, await tourHashPassword(password), locked).run();
-        tourId = Number(ins.meta.last_row_id);
-      } catch {
-        throw new HttpError(409, '这个昵称已被占用'); // UNIQUE 撞名
-      }
-      const local = await mirrorTourUser(env, { id: tourId, name, role: 'coach' });
-      const token = await createSession(env, local.id);
-      return json({ ok: true, locked: locked === 1 }, 200, { 'Set-Cookie': sessionCookie(token) });
+      throw new HttpError(410, '注册已收口到统一认证中心，请前往认证中心注册');
     }
 
-    // 改密：写回赛事系统 user 表（共享账号池），两边任一站改密全站生效
+    // 改密：收口到认证中心（增量 9D 残留清理：兼容模式直写赛事库 user 表 password_hash
+    // 的分支已删；兼容模式下本端点返回 410）
     if (method === 'POST' && seg[0] === 'password') {
-      // OIDC 模式：本站无改密入口，浏览器带去认证中心改密页
       if (isOidc(env)) return Response.redirect(`${env.OIDC_ISSUER}/password`, 302);
-      const user = await requireUser(env, request);
-      if (!env.TOUR_DB) throw new HttpError(500, '未配置赛事库');
-      if (!user.tour_id) throw new HttpError(400, '当前账号未关联赛事系统身份');
-      const body = await readBody(request);
-      const newPassword = String(body.newPassword ?? '');
-      if (newPassword.length < 8 || !/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
-        throw new HttpError(400, '密码至少 8 位，且要同时包含字母和数字');
-      }
-      const row = await env.TOUR_DB.prepare('SELECT password_hash FROM user WHERE id = ?')
-        .bind(user.tour_id).first() as any;
-      if (!row) throw new HttpError(404, '赛事系统账号不存在');
-      if (!(await tourVerifyPassword(String(body.oldPassword ?? ''), row.password_hash))) {
-        throw new HttpError(401, '当前密码不正确');
-      }
-      await env.TOUR_DB.prepare('UPDATE user SET password_hash = ?, must_change_pw = 0 WHERE id = ?')
-        .bind(await tourHashPassword(newPassword), user.tour_id).run();
-      return json({ ok: true });
+      throw new HttpError(410, '改密已收口到统一认证中心，请前往认证中心操作');
     }
 
     // 登录：验密走赛事系统 user 表（共享账号池，两边注册的账号互通），本地只建会话。

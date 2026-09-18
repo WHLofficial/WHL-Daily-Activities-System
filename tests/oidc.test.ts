@@ -266,6 +266,12 @@ describe('统一认证接入（步骤② OIDC RP）', () => {
     expect(meBody.user.username).toBe('smboss');
     expect(meBody.authMode).toBe('shared');
     expect(meBody.authHome).toBeNull();
+
+    // 增量 9D：注册/改密直写赛事库已删，兼容模式一律 410
+    const reg = await call(env, 'POST', '/api/register', { body: { name: 'x', password: 'TestPass123' } });
+    expect(reg.status).toBe(410);
+    const pwd = await call(env, 'POST', '/api/password', { body: { newPassword: 'TestPass123' } });
+    expect(pwd.status).toBe(410);
   });
 
   it('发起登录：302 到 authorize，scope=openid + PKCE S256 + __Host- 临时 cookie', async () => {
