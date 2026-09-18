@@ -23,8 +23,11 @@ export const TOUR_HOME = 'https://whleague.win/';
 
 export const BACKCHANNEL_LOGOUT_EVENT = 'http://schemas.openid.net/event/backchannel-logout';
 
+// OIDC 模式 = AUTH_MODE 显式配 "oidc"（增量 9 显式化）+ 两项连接变量齐备；未配 AUTH_MODE =
+// 兼容模式（共享 cookie 透传 + 本地会话）。不再靠 OIDC_ISSUER 的有无隐式判定——
+// vars 随 wrangler.jsonc 一起部署，杜绝「忘配/半配悄悄改行为」。
 export function isOidc(env: any): boolean {
-  return Boolean(env.OIDC_ISSUER && env.OIDC_CLIENT_ID);
+  return Boolean(env?.AUTH_MODE === 'oidc' && env?.OIDC_ISSUER && env?.OIDC_CLIENT_ID);
 }
 
 function sha256hex(s: string): Promise<string> {

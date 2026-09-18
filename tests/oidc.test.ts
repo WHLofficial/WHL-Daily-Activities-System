@@ -191,7 +191,7 @@ function freshEnv(oidc: boolean): Fixture {
       put: async (k: string, v: string) => void kv.set(k, v),
       delete: async (k: string) => void kv.delete(k),
     },
-    ...(oidc ? { OIDC_ISSUER: ISSUER, OIDC_CLIENT_ID: CLIENT_ID } : {}),
+    ...(oidc ? { AUTH_MODE: 'oidc', OIDC_ISSUER: ISSUER, OIDC_CLIENT_ID: CLIENT_ID } : {}),
   };
   return { env, sqlite };
 }
