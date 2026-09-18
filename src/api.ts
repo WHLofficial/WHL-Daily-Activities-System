@@ -15,6 +15,7 @@ import { enqueueOpenNotice, sendDueReminders } from './_lib/notify.ts';
 import { sealExpiredEvents } from './_lib/seal.ts';
 import { maxRewardOf } from './_lib/reward.ts';
 import { handleOidc, isOidc, oidcSessionToken, clearOidcSessionCookie } from './_lib/oidc.ts';
+import { lookupQqBindings, lookupQqByLocalIds } from './_lib/authLookup.ts';
 
 function uuid(): string {
   return crypto.randomUUID();
@@ -287,9 +288,13 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
       const user = await getAuthUser(env, request);
       // 未登录也带 authMode/authHome：前端进站第一件事就是渲染登录入口，得知道往哪跳
       if (!user) return json({ user: null, authMode: isOidc(env) ? 'oidc' : 'shared', authHome: isOidc(env) ? env.OIDC_ISSUER : null });
-      // 绑定信息与发起人标记互不依赖，并行查（/me 每次进站都要走）
+      // 绑定信息与发起人标记互不依赖，并行查（/me 每次进站都要走）。
+      // 增量 9B：OIDC 绑定真源实时查 auth（failOpen：查询失败按未绑定展示，不挡进站）；
+      // 兼容模式读本地镜像（只读）
       const [binding, isInit] = await Promise.all([
-        env.DB.prepare('SELECT qq_id, bound_at FROM user_binding WHERE user_id = ?').bind(user.id).first(),
+        isOidc(env)
+          ? lookupQqBindings(env, [user.tour_id], { failOpen: true }).then((m) => m.get(user.tour_id) ?? null)
+          : env.DB.prepare('SELECT qq_id, bound_at FROM user_binding WHERE user_id = ?').bind(user.id).first(),
         user.role === 'admin' ? Promise.resolve(true) : isInitiator(env, user.id),
       ]) as any[];
       // authMode/authHome（统一认证迁移步骤②）：前端据此分流登录/注册/改密/登出入口；
@@ -442,7 +447,10 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
 
     if (method === 'PUT' && seg[0] === 'events' && seg[2] === 'predictions' && seg.length === 3) {
       const user = await requireUser(env, request);
-      const bound = await env.DB.prepare('SELECT 1 AS ok FROM user_binding WHERE user_id = ?').bind(user.id).first();
+      // 绑定门槛（增量 9B）：OIDC 实时查 auth（fail-closed：通道故障 503，宁拒不误放）；兼容模式读本地镜像
+      const bound = isOidc(env)
+        ? (await lookupQqBindings(env, [user.tour_id])).size > 0
+        : Boolean(await env.DB.prepare('SELECT 1 AS ok FROM user_binding WHERE user_id = ?').bind(user.id).first());
       if (!bound) throw new HttpError(403, '请先完成 QQ 绑定再提交预测', 'need_binding');
       const event = await env.DB.prepare('SELECT * FROM event WHERE id = ?').bind(Number(seg[1])).first() as any;
       if (!event) throw new HttpError(404, '竞猜不存在');
@@ -521,6 +529,11 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
              LEFT JOIN initiators i ON i.user_id = u.id
             ORDER BY u.id LIMIT 200`,
         ).all()).results;
+        // 增量 9B：OIDC 下本地镜像已停写，bound 标记改实时查 auth（failOpen：通道故障不挡管理页）
+        if (isOidc(env)) {
+          const boundMap = await lookupQqByLocalIds(env, (rows as any[]).map((r) => r.id), { failOpen: true });
+          for (const r of rows as any[]) r.bound = boundMap.has(r.id);
+        }
         return json({ users: rows });
       }
 
@@ -650,7 +663,9 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
       if (isEventRoute && !event) throw new HttpError(404, '竞猜不存在');
 
       if (isEventRoute && method === 'GET' && seg.length === 3) {
-        // 六条查询互不依赖，一把并行（管理详情是操作前必经页面）
+        // 六条查询互不依赖，一把并行（管理详情是操作前必经页面）。
+        // 增量 9B：OIDC 下绑定真源在 auth，跳过本地 user_binding JOIN，改查后批量 lookup 补 qq
+        const oidcMode = isOidc(env);
         const [matchesR, itemsR, predsR, bindingsR, st, batch] = await Promise.all([
           env.DB.prepare('SELECT * FROM match WHERE event_id = ? ORDER BY id').bind(eventId).all(),
           env.DB.prepare(
@@ -662,20 +677,28 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
                JOIN users u ON u.id = p.user_id
               WHERE i.event_id = ? ORDER BY u.id`,
           ).bind(eventId).all(),
-          env.DB.prepare(
-            `SELECT DISTINCT p.user_id, b.qq_id FROM prediction p
-               JOIN play_item i ON i.id = p.play_item_id
-               LEFT JOIN user_binding b ON b.user_id = p.user_id
-              WHERE i.event_id = ?`,
-          ).bind(eventId).all(),
+          oidcMode
+            ? Promise.resolve(null as any)
+            : env.DB.prepare(
+                `SELECT DISTINCT p.user_id, b.qq_id FROM prediction p
+                   JOIN play_item i ON i.id = p.play_item_id
+                   LEFT JOIN user_binding b ON b.user_id = p.user_id
+                  WHERE i.event_id = ?`,
+              ).bind(eventId).all(),
           env.DB.prepare('SELECT * FROM settlement WHERE event_id = ?').bind(eventId).first(),
           env.DB.prepare('SELECT * FROM payout_batch WHERE event_id = ?').bind(eventId).first(),
         ]) as any[];
         const matches = matchesR.results;
         const items = itemsR.results as any[];
         const preds = predsR.results as any[];
-        const bindings = bindingsR.results as any[];
-        const qqMap = new Map(bindings.map((b) => [b.user_id, b.qq_id]));
+        let qqMap: Map<number, string | null>;
+        if (bindingsR) {
+          qqMap = new Map((bindingsR.results as any[]).map((b) => [b.user_id, b.qq_id]));
+        } else {
+          qqMap = new Map();
+          const boundMap = await lookupQqByLocalIds(env, preds.map((p: any) => p.user_id));
+          for (const [localId, b] of boundMap) qqMap.set(localId, b.qq_id);
+        }
         return json({
           event, matches, items, form: formOf(items),
           predictions: preds.map((p) => ({
@@ -804,8 +827,16 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
           });
         }
         const results = JSON.parse(st.result_json);
-        const bindings = (await env.DB.prepare('SELECT user_id, qq_id FROM user_binding').all()).results as any[];
-        const qqMap = new Map(bindings.map((b) => [b.user_id, b.qq_id]));
+        // 发奖绑定真源（增量 9B）：OIDC 实时批量查 auth（fail-closed：通道故障 503，宁停发不漏发/误发），
+        // 不再用登录时点镜像快照（历史事故：快照过期、qq=null 被当解绑误删本地行）；兼容模式读本地镜像
+        let qqMap: Map<number, string>;
+        if (isOidc(env)) {
+          const boundMap = await lookupQqByLocalIds(env, detail.map((d: any) => d.user_id));
+          qqMap = new Map([...boundMap].map(([localId, b]) => [localId, b.qq_id]));
+        } else {
+          const bindings = (await env.DB.prepare('SELECT user_id, qq_id FROM user_binding').all()).results as any[];
+          qqMap = new Map(bindings.map((b) => [b.user_id, b.qq_id]));
+        }
         const payable = detail.filter((d: any) => d.total > 0 && qqMap.has(d.user_id));
         const unbound = detail.filter((d: any) => d.total > 0 && !qqMap.has(d.user_id)).map((d: any) => d.name);
         if (payable.length === 0) {

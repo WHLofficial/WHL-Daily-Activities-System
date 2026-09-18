@@ -3,11 +3,11 @@
 // 签发侧在 auth 服务，这里只做客户端。配置 OIDC_ISSUER + OIDC_CLIENT_ID 即切换，
 // 未配置 = 兼容模式（共享 cookie 透传 + 本地 30 天会话），/api/auth/* 端点按需退化。
 // 步骤③收口：回调拉 userinfo 存 claims（角色/权限/状态），判定不再查赛事库 user 表；
-// QQ 绑定镜像随回调的 userinfo 快照同步本地 user_binding（绑定全流程搬 auth 属 PRD P0-8）。
+// QQ 绑定不再镜像本地（增量 9B 停 user_binding 读写），读点实时查 auth 的 identity 表。
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import { HttpError } from './http.ts';
 // 运行时才引用（函数声明，无模块求值期依赖）：auth.ts 也反向导入本文件，ESM 环安全
-import { mirrorClaimsUser, parseOidcClaims } from './auth.ts';
+import { parseOidcClaims } from './auth.ts';
 
 export const OIDC_SESSION_COOKIE = '__Host-guess_session';
 // authorize 跳转前的 state/nonce/verifier 中转（10 分钟寿命，登录完成后即删）
@@ -139,36 +139,6 @@ function jwksFor(issuer: string): ReturnType<typeof createRemoteJWKSet> {
     jwksCache.set(issuer, jwks);
   }
   return jwks;
-}
-
-// QQ 绑定镜像（P0-8）：绑定真源在 auth 的 identity 表，登录回调用 userinfo 的 qq 快照
-// 同步本地 user_binding——预测门槛、发奖批量、对账的 JOIN 全部零改动，兼容模式行为完全
-// 等价。登录之后站点外的绑定/解绑变化要等下一次登录才刷进来（OIDC 模式下绑定入口已移交
-// 认证中心，前端指引重登刷新）。本地锚点用镜像 users.id（user_binding 既有外键语义）。
-// 步骤③收口：userinfo 由回调统一拉取校验后传入（含 claims 所需字段），镜像也从 claims 建立，
-// 不再查赛事库 user 表。
-async function mirrorBinding(env: any, sub: string, info: { qq?: unknown; name: string; roles: string[] }): Promise<void> {
-  try {
-    const local = await mirrorClaimsUser(env, sub, info);
-    const qq = typeof info.qq === 'string' && info.qq ? info.qq : null;
-    if (qq) {
-      await env.DB.batch([
-        // auth 已保证 QQ 全局唯一；本地镜像若残留同 QQ 挂在别人名下的旧行（迁移前旧数据），
-        // 以认证中心为准清掉
-        env.DB.prepare('DELETE FROM user_binding WHERE qq_id = ? AND user_id != ?').bind(qq, local.id),
-        env.DB.prepare(
-          `INSERT INTO user_binding (user_id, qq_id, bound_at) VALUES (?, ?, datetime('now'))
-             ON CONFLICT(user_id) DO UPDATE SET qq_id = excluded.qq_id,
-               bound_at = CASE WHEN user_binding.qq_id != excluded.qq_id
-                               THEN excluded.bound_at ELSE user_binding.bound_at END`,
-        ).bind(local.id, qq),
-      ]);
-    } else {
-      await env.DB.prepare('DELETE FROM user_binding WHERE user_id = ?').bind(local.id).run();
-    }
-  } catch (e: any) {
-    console.error('[oidc] binding mirror failed:', e?.message || e);
-  }
 }
 
 // ---------- 四端点（api.ts 在认证段前分发；不受改密门拦截） ----------
@@ -314,7 +284,8 @@ if (method === 'GET' && seg[1] === 'login' && seg.length === 2) {
     ).bind(await sha256hex(token), payload.sub, payload.sid, JSON.stringify(claims), now,
       new Date(Date.now() + SESSION_TTL_SECONDS * 1000).toISOString()).run();
 
-    await mirrorBinding(env, payload.sub, info as { qq?: unknown; name: string; roles: string[] });
+    // 增量 9B：QQ 绑定镜像（mirrorBinding）已退役——绑定真源实时查 auth（_lib/authLookup.ts），
+    // 本地 user_binding 停写停读，根除「qq=null 被当解绑误删本地行」的事故面；登录路径少 2 次 D1 写
     return redirect(safeReturn(temp.returnTo), sessionCookie(token), clearCookie(OIDC_TEMP_COOKIE));
   }
 

@@ -6,7 +6,7 @@
 import { beforeAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { exportJWK, generateKeyPair, SignJWT, type JWTPayload } from 'jose';
 import { handleApi } from '../src/api.ts';
 import { tourHashPassword } from '../src/_lib/tourcrypto.ts';
@@ -117,6 +117,17 @@ async function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       { headers: { 'content-type': 'application/json' } },
     );
   }
+  // 机器查询通道（增量 9B）：按 auth machineGate 契约验签，返回 stub.bindings
+  if (url.pathname === '/api/admin/identity/lookup') {
+    if (stub.lookupStatus) return new Response('boom', { status: stub.lookupStatus });
+    const h = (init?.headers ?? {}) as Record<string, string>;
+    const ts = String(h['X-Timestamp'] ?? '');
+    const sign = String(h['X-Sign'] ?? '');
+    const raw = String(init?.body ?? '');
+    const expect = createHmac('sha256', 'test-bind-secret').update(`POST|${url.pathname}|${ts}|${raw}`).digest('hex');
+    if (!ts || sign !== expect) return new Response(JSON.stringify({ error: 'bad sign' }), { status: 401 });
+    return new Response(JSON.stringify({ bindings: stub.bindings ?? [] }), { headers: { 'content-type': 'application/json' } });
+  }
   return new Response('not found', { status: 404 });
 }
 
@@ -191,7 +202,7 @@ function freshEnv(oidc: boolean): Fixture {
       put: async (k: string, v: string) => void kv.set(k, v),
       delete: async (k: string) => void kv.delete(k),
     },
-    ...(oidc ? { AUTH_MODE: 'oidc', OIDC_ISSUER: ISSUER, OIDC_CLIENT_ID: CLIENT_ID } : {}),
+    ...(oidc ? { AUTH_MODE: 'oidc', OIDC_ISSUER: ISSUER, OIDC_CLIENT_ID: CLIENT_ID, AUTH_BIND_SECRET: 'test-bind-secret' } : {}),
   };
   return { env, sqlite };
 }
@@ -220,7 +231,7 @@ function cookieOf(res: Response, name: string): string | undefined {
 }
 
 /** 完整登录：发起 → 伪 auth 发码 → 回调。返回回调响应与会话 cookie。 */
-async function oidcLogin(env: any, opts?: { sub?: string; sid?: string; qq?: string | null; userinfoStatus?: number }) {
+async function oidcLogin(env: any, opts?: { sub?: string; sid?: string; qq?: string | null; userinfoStatus?: number; bindings?: { account_id: number; qq_id: string; bound_at?: string }[]; lookupStatus?: number }) {
   const start = await call(env, 'GET', '/api/auth/login');
   expect(start.status).toBe(302);
   const authUrl = new URL(start.headers.get('Location')!);
@@ -234,6 +245,8 @@ async function oidcLogin(env: any, opts?: { sub?: string; sid?: string; qq?: str
     sid: opts?.sid ?? 'sid-1',
     qq: opts?.qq ?? null,
     userinfoStatus: opts?.userinfoStatus,
+    bindings: opts?.bindings,
+    lookupStatus: opts?.lookupStatus,
     tokenCalls: [],
   };
   const cb = await call(env, 'GET', `/api/auth/callback?code=${stub.code}&state=${authUrl.searchParams.get('state')}&iss=${encodeURIComponent(ISSUER)}`, { cookie: `__Host-guess_oidc=${temp}` });
@@ -453,51 +466,32 @@ describe('统一认证接入（步骤② OIDC RP）', () => {
   });
 });
 
-describe('QQ 绑定镜像与端点收口（P0-8）', () => {
-  it('登录快照：userinfo 的 qq 落进本地 user_binding（锚镜像 users.id），/api/me 带出绑定', async () => {
+describe('QQ 绑定实时查询与镜像退役（增量 9B）', () => {
+  it('停镜像：登录/换绑/解绑全程不写本地 user_binding（历史事故面根除）', async () => {
     vi.stubGlobal('fetch', fakeFetch);
     const { env, sqlite } = freshEnv(true);
-    const { session } = await oidcLogin(env, { qq: '12345' });
-    const localId = (sqlite.prepare('SELECT id FROM users WHERE tour_id = 6').get() as any).id;
-    expect(sqlite.prepare('SELECT qq_id FROM user_binding WHERE user_id = ?').get(localId)).toEqual({ qq_id: '12345' });
-    const me = await call(env, 'GET', '/api/me', { cookie: `__Host-guess_session=${session}` });
-    expect((await me.json()).binding).toMatchObject({ qq_id: '12345' });
-  });
-
-  it('重登刷新：换绑覆盖同账号单行；userinfo 故障保留旧快照不误删；未绑清残留', async () => {
-    vi.stubGlobal('fetch', fakeFetch);
-    const { env, sqlite } = freshEnv(true);
-    const localId = () => (sqlite.prepare('SELECT id FROM users WHERE tour_id = 6').get() as any).id;
-    const rowsOf = () => sqlite.prepare('SELECT qq_id FROM user_binding WHERE user_id = ?').all(localId()) as any[];
-
     await oidcLogin(env, { qq: '11111' });
-    await oidcLogin(env, { qq: '22222' }); // 换绑：同账号还是一行
-    expect(rowsOf()).toEqual([{ qq_id: '22222' }]);
-
-    // userinfo 挂了：claims 是判定唯一来源，登录整体 502（旧「软失败建会话」语义随收口退役）；
-    // 旧绑定快照不被误删，重登成功后按认证中心现状刷新
-    const failed = await oidcLogin(env, { qq: '33333', userinfoStatus: 500 });
-    expect(failed.cb.status).toBe(502);
-    expect(rowsOf()).toEqual([{ qq_id: '22222' }]);
-
-    await oidcLogin(env, { qq: null }); // 认证中心侧已解绑
-    expect(rowsOf()).toEqual([]);
+    await oidcLogin(env, { qq: '22222' }); // 换绑（旧实现会覆盖本地行）
+    await oidcLogin(env, { qq: null }); // 解绑（旧实现会 DELETE 本地行，qq=null 误删事故的路径）
+    expect(sqlite.prepare('SELECT COUNT(*) AS n FROM user_binding').get()).toEqual({ n: 0 });
   });
 
-  it('陈旧跨用户行：同 QQ 挂在别人名下的旧镜像行，以认证中心为准清掉', async () => {
+  it('/api/me 的绑定实时查 auth lookup（带 HMAC 签名），不再读本地快照', async () => {
     vi.stubGlobal('fetch', fakeFetch);
-    const { env, sqlite } = freshEnv(true);
-    // 预置 user 7 的镜像与一条属于它的旧绑定（迁移前的数据形态）
-    sqlite.prepare(
-      "INSERT INTO users (tour_id, username, display_name, role, password_salt, password_hash) VALUES (7, 'oidctest5', 'oidctest5', 'admin', '', '')",
-    ).run();
-    const staleId = (sqlite.prepare('SELECT id FROM users WHERE tour_id = 7').get() as any).id;
-    sqlite.prepare('INSERT INTO user_binding (user_id, qq_id) VALUES (?, ?)').run(staleId, '12345');
+    const { env } = freshEnv(true);
+    const { session } = await oidcLogin(env, {
+      qq: '12345',
+      bindings: [{ account_id: 6, qq_id: '12345', bound_at: '2026-09-18T00:00:00Z' }],
+    });
+    const me = await call(env, 'GET', '/api/me', { cookie: `__Host-guess_session=${session}` });
+    expect(me.status).toBe(200);
+    expect((await me.json()).binding).toEqual({ account_id: 6, qq_id: '12345', bound_at: '2026-09-18T00:00:00Z' });
 
-    await oidcLogin(env, { qq: '12345' });
-    const u6 = (sqlite.prepare('SELECT id FROM users WHERE tour_id = 6').get() as any).id;
-    expect(sqlite.prepare('SELECT user_id FROM user_binding WHERE qq_id = ?').get('12345')).toEqual({ user_id: u6 });
-    expect(sqlite.prepare('SELECT qq_id FROM user_binding WHERE user_id = ?').all(staleId)).toEqual([]);
+    // lookup 通道故障：failOpen 语义，/me 仍 200、按未绑定展示
+    const broken = await oidcLogin(env, { qq: '12345', bindings: [{ account_id: 6, qq_id: '12345' }], lookupStatus: 500 });
+    const me2 = await call(env, 'GET', '/api/me', { cookie: `__Host-guess_session=${broken.session}` });
+    expect(me2.status).toBe(200);
+    expect((await me2.json()).binding).toBeNull();
   });
 
   it('OIDC 模式下本站绑定端点整体下线：bind/new 与 bind/claim 一律 400 bind_moved', async () => {
