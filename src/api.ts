@@ -520,17 +520,26 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
       if (method === 'GET' && seg[1] === 'users' && seg.length === 2) {
         // 步骤③：OIDC 按权限点判定（持有人与旧 admin 角色重合），兼容模式回落角色
         await requireAdminPerm(env, request, user, 'guess.users.manage', '仅管理员可查看账号');
+        // 增量 10：OIDC 下 user_binding 已停写停读，SQL 不再 JOIN（bound 由下面实时查 auth 补齐）；
+        // 兼容模式仍读本地镜像快照，原 SQL 保留
+        const oidc = isOidc(env);
         const rows = (await env.DB.prepare(
-          `SELECT u.id, u.username, u.display_name, u.role, u.tour_id,
-                  (b.user_id IS NOT NULL) AS bound,
-                  (i.user_id IS NOT NULL) AS is_initiator
-             FROM users u
-             LEFT JOIN user_binding b ON b.user_id = u.id
-             LEFT JOIN initiators i ON i.user_id = u.id
-            ORDER BY u.id LIMIT 200`,
+          oidc
+            ? `SELECT u.id, u.username, u.display_name, u.role, u.tour_id,
+                      (i.user_id IS NOT NULL) AS is_initiator
+                 FROM users u
+                 LEFT JOIN initiators i ON i.user_id = u.id
+                ORDER BY u.id LIMIT 200`
+            : `SELECT u.id, u.username, u.display_name, u.role, u.tour_id,
+                      (b.user_id IS NOT NULL) AS bound,
+                      (i.user_id IS NOT NULL) AS is_initiator
+                 FROM users u
+                 LEFT JOIN user_binding b ON b.user_id = u.id
+                 LEFT JOIN initiators i ON i.user_id = u.id
+                ORDER BY u.id LIMIT 200`,
         ).all()).results;
-        // 增量 9B：OIDC 下本地镜像已停写，bound 标记改实时查 auth（failOpen：通道故障不挡管理页）
-        if (isOidc(env)) {
+        // 增量 9B：bound 标记实时查 auth（failOpen：通道故障不挡管理页）
+        if (oidc) {
           const boundMap = await lookupQqByLocalIds(env, (rows as any[]).map((r) => r.id), { failOpen: true });
           for (const r of rows as any[]) r.bound = boundMap.has(r.id);
         }
