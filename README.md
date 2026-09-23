@@ -87,7 +87,7 @@ OIDC 模式行为变化：登录/注册/改密入口 302 移交认证中心（�
 - 角色映射：赛事 `admin/superadmin` → 竞猜管理员；`coach`（含观众号）→ 普通用户；发起人是本库 `initiators` 名单，管理员在「发起人名单」里勾选。
 - 改密两站通用：`POST /api/password` 写回赛事库；`must_change_pw` 账号两站都视为不可登录，需回赛事系统改密。
 - **提交预测前必须绑定 QQ**（未绑定提交返回 403 并引导到绑定页）；绑定码流程见插件对接文档。
-- 主域名 `whleague.win`：竞猜绑 `guess.whleague.win`，赛事系统在 `whleague.win`（或其子域）。
+- 主域名 `whleague.win`：竞猜绑 `guess.whleague.win`，赛事系统在 `tour.whleague.win`。
 - 赛事系统侧执行 `npx wrangler secret put COOKIE_DOMAIN` 填 `.whleague.win`（用 secret 而非 vars：`wrangler deploy` 会覆盖 dashboard vars），cookie 即跨子域生效。
 
 ## 插件侧（AstrBot）

@@ -258,7 +258,7 @@ describe('统一认证接入（步骤② OIDC RP）', () => {
     const { env } = freshEnv(false);
     const start = await call(env, 'GET', '/api/auth/login');
     expect(start.status).toBe(302);
-    expect(start.headers.get('Location')).toBe('https://whleague.win/');
+    expect(start.headers.get('Location')).toBe('https://tour.whleague.win/');
 
     const cb = await call(env, 'GET', '/api/auth/callback?code=x&state=y');
     expect(cb.status).toBe(404);
@@ -267,7 +267,7 @@ describe('统一认证接入（步骤② OIDC RP）', () => {
 
     const logout = await call(env, 'POST', '/api/auth/logout');
     expect(logout.status).toBe(302);
-    expect(logout.headers.get('Location')).toBe('https://whleague.win/');
+    expect(logout.headers.get('Location')).toBe('https://tour.whleague.win/');
 
     // 旧账密登录链路不受影响：验密走赛事库 → 建 30 天本地会话
     const login = await call(env, 'POST', '/api/login', { body: { username: 'smboss', password: 'secret123' } });

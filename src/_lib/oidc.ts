@@ -19,7 +19,7 @@ const PROBE_COOLDOWN_SECONDS = 60;
 // 对齐 auth 会话 7 天（TECH_DESIGN §8-6：client 本地会话 ≤ auth 会话；退役旧 30 天口径）
 export const SESSION_TTL_SECONDS = 7 * 24 * 3600;
 // 兼容模式下若有人点了 OIDC 入口（理论不可达），回赛事系统老路
-export const TOUR_HOME = 'https://whleague.win/';
+export const TOUR_HOME = 'https://tour.whleague.win/';
 
 export const BACKCHANNEL_LOGOUT_EVENT = 'http://schemas.openid.net/event/backchannel-logout';
 

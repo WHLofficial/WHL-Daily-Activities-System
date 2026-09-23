@@ -6,7 +6,7 @@
 >
 > | 组件 | 地址 | 说明 |
 > |---|---|---|
-> | 赛事系统 | `whleague.win`（已部署） | 登录真源，cookie 发给全主域 |
+> | 赛事系统 | `tour.whleague.win`（已部署） | 登录真源，cookie 发给全主域 |
 > | 竞猜系统 | `guess.whleague.win` | 单个 Worker：静态资源 + API + 内置 cron |
 > | AstrBot 插件 | 腾讯云服务器 | 积分真源，经 Cloudflare Tunnel 暴露 |
 >
@@ -124,7 +124,7 @@ npx wrangler secret delete SETUP_TOKEN
    cd WHL-tournament-management-system
    npx wrangler secret put COOKIE_DOMAIN      # 填 .whleague.win
    ```
-2. 浏览器登录 `whleague.win`（赛事系统），然后新标签打开 `guess.whleague.win`。
+2. 浏览器登录 `tour.whleague.win`（赛事系统），然后新标签打开 `guess.whleague.win`。
 3. ✅ 验证：竞猜页右上角直接显示赛事系统的昵称（无需再登录）。
    - 若显示未登录：检查 COOKIE_DOMAIN 是否已配、竞猜是否走 `guess.` 子域、浏览器是否有 `whleague.win` 域下的 `whl_session` cookie。
 4. 再验证独立注册登录：竞猜站退出后用注册页建一个新号（需注册码或赛事系统放开开放注册），确认该账号也能登录赛事系统。
