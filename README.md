@@ -40,20 +40,23 @@ npm install
 #   SYNC_BASE_URL=http://127.0.0.1:9991   ← 指向 mock 或真插件
 npx wrangler d1 migrations apply whl-guess --local   # 初始化本地 D1
 # 播种赛事本地库（兼容模式旧账密登录要查它；账号真源在 auth，本地只需与 auth 账号同 id 的 user 行。必须在 dev 启动【前】执行，dev 运行中跑会锁库静默失败）：
-npx wrangler d1 execute whl --local --command "INSERT INTO organization (id,name,allow_open_reg) VALUES (1,'WHL',1) ON CONFLICT(id) DO UPDATE SET allow_open_reg=1"
 npx wrangler d1 execute whl --local --command "INSERT OR IGNORE INTO user (name,password_hash,role) VALUES ('smboss','$(node scripts/gen-tour-hash.mjs secret123)','admin')"
+# 冒烟脚本的群友账号（兼容模式已无自助注册，POST /api/register 一律 410，只能先播种再走 /api/login）：
+npx wrangler d1 execute whl --local --command "INSERT OR IGNORE INTO user (name,password_hash,role) VALUES ('sm1','$(node scripts/gen-tour-hash.mjs pass1111)','coach'),('sm2','$(node scripts/gen-tour-hash.mjs pass2222)','coach'),('sm3','$(node scripts/gen-tour-hash.mjs pass3333)','coach')"
+# ↑ 要反复跑冒烟的话用 bash scripts/reset-local.sh 代替上面这段：它停本仓进程、清竞猜库业务数据、重播 sm1-sm3、清 SESSION_KV（登录限流计数就在这，不清会撞 429）
 npm run dev                                          # 起服务（8789，兼容模式）
 
 # 另开两个终端：
-SYNC_SECRET=testsecret node scripts/mock-plugin.js 9991   # 模拟插件
-bash scripts/smoke-test.sh                                # 端到端冒烟（跑完人工核对输出）
+mkdir -p .smoke-tmp
+SYNC_SECRET=testsecret node scripts/mock-plugin.js 9991 > .smoke-tmp/mock.log 2>&1   # 模拟插件；stdout 要留档
+MOCK_LOG=.smoke-tmp/mock.log bash scripts/smoke-test.sh                              # 端到端冒烟（步 12 读插件日志数提交次数）
 ```
 
-冒烟脚本覆盖：播种赛事库（开放注册+管理员）→ 前端脚本语法检查 → 登录 → 注册（重名/弱密码拒绝）→ 建期（含已下线题型探针）→ 绑定码认领（含重放拒绝）→ 提交预测（未绑定拒绝）→ 他人答案可见 → 奖励一览（最高可得）→ 截止 → 录比分 → 结算断言（档位/上限/非参与者）→ 确认发奖（幂等 + 并发）→ 无人命中跳过发奖 → 猜胜负三种模式 → cron 重试（含错 key 拒绝）→ 每日对账 → 战报拉取 → 数据库核对 → 强制改密 → 开放通知与截止前提醒。
+冒烟脚本覆盖：播种赛事库（管理员 + 三个群友账号）→ 前端脚本语法检查 → 登录 → 建期（含已下线题型探针）→ 绑定码认领（含重放拒绝）→ 提交预测（未绑定拒绝）→ 他人答案可见 → 奖励一览（最高可得）→ 截止 → 录比分 → 结算断言（档位/上限/非参与者）→ 确认发奖（幂等 + 并发）→ 无人命中跳过发奖 → 猜胜负三种模式 → cron 重试（含错 key 拒绝）→ 每日对账 → 战报拉取 → 数据库核对 → 开放通知与截止前提醒。自助注册与站内改密不在覆盖内——兼容模式下这两个接口一律 410（已收口到认证中心）。
 
 > **本地 dev 的模式开关**：`wrangler dev` 会继承 `wrangler.jsonc` 的 `vars`，而生产那套是 `AUTH_MODE=oidc`。所以 `npm run dev` 显式带 `--var AUTH_MODE:compat` 回到兼容模式（`src/_lib/oidc.ts:29` 的 `isOidc` 只认字面量 `'oidc'`），`npm run dev:oidc` 才是 OIDC 联调。`scripts/smoke-test.sh` 跑的是兼容模式链路，开头有模式闸门，跑错模式会带着正确命令直接退出。
 
-**Windows 注意**：`wrangler dev` 崩溃后常残留 `workerd.exe` 孤儿进程，重启前先 `taskkill /F /IM workerd.exe`。本地开发用 8789 端口——8788 被历史僵尸连接污染过会一直挂起。
+**Windows 注意**：`wrangler dev` 崩溃后常残留 `workerd.exe` 孤儿进程，重启前先清掉——但**别用 `taskkill /F /IM workerd.exe`**，那会连本机其他仓库（例如 WHL-auth-service）的 dev 服务一起杀。按命令行过滤只清本仓的：`powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'workerd.exe' -and $_.CommandLine -match 'WHL-Daily-Activities-System' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"`（`scripts/reset-local.sh` 已按此实现）。本地开发用 8789 端口——8788 被历史僵尸连接污染过会一直挂起。
 
 ### OIDC 模式（统一认证迁移步骤②，auth 项目 PRD P0-6）
 
@@ -86,7 +89,7 @@ OIDC 模式行为变化：登录/注册/改密入口 302 移交认证中心（�
 - **账号真源在 auth 认证中心**（`https://auth.whleague.win`）：生产 `AUTH_MODE=oidc` 下，登录/注册/改密入口 302 移交认证中心；姓名/状态/角色/权限全部来自登录回调存档的 claims（`src/_lib/auth.ts` 的 `parseOidcClaims`），不再查赛事库 `user` 表。赛事库 `whl` 的 `user` 表已退化为 auth 账号的精简镜像，**不要再新增对它的读写**。
 - 本地 `users` 表只是镜像锚点（`users.tour_id` = auth account.id，由 claims 建立/更新），预测、发奖、对账的 JOIN 都锚在本地 `users.id`。
 - 自动登录：OIDC 模式靠进站静默探测认证中心会话（`prompt=none`）；兼容模式靠跨项目共享 cookie——读赛事系统 KV（`SESSION_KV`）里的 `whl_session` 自动镜像登录（`users.tour_id`）。
-- 兼容模式（未配 `AUTH_MODE`，理论回滚位）：注册/改密一律 410；旧账密登录 `POST /api/login` 仍只读校验赛事库 `user` 表（`src/_lib/tourcrypto.ts` 的 PBKDF2 单串格式）并建 30 天本地会话。
+- 兼容模式（未配 `AUTH_MODE`，理论回滚位）：注册/改密一律 410；旧账密登录 `POST /api/login` 仍只读校验赛事库 `user` 表（`src/_lib/tourcrypto.ts` 的 PBKDF2 单串格式）并建 30 天本地会话。注意：被管理员重置过密码的账号（`must_change_pw=1`）在兼容模式下能登录，但除改密/登出/看自身状态外一律 403，而改密入口已 410——这个标记只能在赛事库手工清零，别用它播种本地测试账号。
 - 角色映射：OIDC 下由 claims 投影（`guess.admin` / `superadmin` → 竞猜管理员，其余 → 普通用户）；兼容模式按赛事库 `role` 映射（`admin`/`superadmin` → 管理员，其余含观众号 → 普通用户）。发起人是本库 `initiators` 名单，管理员在「发起人名单」里勾选。
 - **提交预测前必须绑定 QQ**（未绑定提交返回 403 并引导到绑定页）；绑定码流程见插件对接文档。
 - 主域名 `whleague.win`：竞猜绑 `guess.whleague.win`，赛事系统在 `tour.whleague.win`。

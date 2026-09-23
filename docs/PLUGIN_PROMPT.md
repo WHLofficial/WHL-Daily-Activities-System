@@ -81,8 +81,9 @@
 5. 战报：先发群成功、后 ack；人为让发送失败（如目标群不可用）时不 ack、下轮重拉。
 6. 断网模拟：竞猜侧 dispatch 时插件不可达会进重试队列（1/5/15/60 分钟，共 5 次）——
    插件恢复后无需任何人工操作，重试自动到账（这是服务器侧行为，插件只需保证幂等）。
-7. 联调：本地 `npx wrangler dev --port 8789` + `.dev.vars` 指向插件端口，
-   跑 `scripts/smoke-test.sh` 12 步全过（credited 路径）。
+7. 联调：本地 `npm run dev`（8789，已带 `--var AUTH_MODE:compat`）+ `.dev.vars` 指向插件端口，
+   跑 `scripts/smoke-test.sh` 18 步全过（credited 路径；要跑到「并发确认发奖」那步的幂等断言，
+   需把插件 stdout 重定向到文件并用 `MOCK_LOG=` 指过去，脚本靠它数每笔 payout 只提交一次）。
 
 ## 交付物
 - 插件目录（含 main.py、_conf_schema.json、sync 模块、README：配置方法与联调步骤）
@@ -94,5 +95,5 @@
 ## 二、给部署人（你）的补充说明
 
 - **先决事实核对**：Agent 动手前需要两样东西——竞猜系统正式地址（`https://guess.whleague.win`）与 `SYNC_SECRET`（本机 `WHL-Daily-Activities-System/.prod-secrets.txt` 里的 `SYNC_SECRET=` 那行）。插件配好后跑 `npx wrangler secret put SYNC_BASE_URL` 填 `https://astrbot.whleague.win`（Tunnel 域名，见 DEPLOY.md 第四步）。
-- **本地联调顺序**：`.dev.vars` 里 `SYNC_BASE_URL=http://127.0.0.1:9991` → 起插件（9991）→ `npm run dev`（8789）→ `bash scripts/smoke-test.sh`。全绿再上服务器。
+- **本地联调顺序**：`.dev.vars` 里 `SYNC_BASE_URL=http://127.0.0.1:9991` → 起插件（9991）→ `npm run dev`（8789）→ `bash scripts/smoke-test.sh`。全绿再上服务器。（插件 stdout 建议重定向到文件，冒烟步 12 的幂等断言靠 `MOCK_LOG=` 读它；反复跑冒烟前先 `bash scripts/reset-local.sh` 复位本地数据。）
 - **上线检查**：Tunnel 存活（DEPLOY.md 4.1 的 401 验证）→ 服务器 secret 改真地址 → 管理台建一场真实竞猜走完整闭环。

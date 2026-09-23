@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
-# WHL 竞猜系统 本地冒烟测试（兼容模式版：注册/登录走赛事库只读校验）
+# WHL 竞猜系统 本地冒烟测试（兼容模式版：登录走赛事库只读校验）
 # 前置（顺序重要）：
 #   a) 竞猜库全新：npx wrangler d1 migrations apply whl-guess --local
 #   b) 赛事本地库播种（必须在 dev 启动【前】执行——dev 运行中跑 d1 execute 会锁库静默失败）：
-#      npx wrangler d1 execute whl --local --command "INSERT INTO organization (id,name,allow_open_reg) VALUES (1,'WHL',1) ON CONFLICT(id) DO UPDATE SET allow_open_reg=1"
 #      npx wrangler d1 execute whl --local --command "INSERT OR IGNORE INTO user (name,password_hash,role) VALUES ('smboss','$(node scripts/gen-tour-hash.mjs secret123)','admin')"
-#      # 步 16 用的「被管理员重置密码」账号（reset-local.sh 也会自动预置）
-#      npx wrangler d1 execute whl --local --command "INSERT OR REPLACE INTO user (name,password_hash,role,locked,must_change_pw) VALUES ('sm4','$(node scripts/gen-tour-hash.mjs pass4444)','coach',0,1)"
+#      # 步 2 的三个群友。兼容模式的自助注册已在增量 9D 收口（POST /api/register 一律 410），
+#      # 所以群友账号也得先播种进赛事库、再走 /api/login 拿会话。
+#      npx wrangler d1 execute whl --local --command "INSERT OR IGNORE INTO user (name,password_hash,role) VALUES ('sm1','$(node scripts/gen-tour-hash.mjs pass1111)','coach'),('sm2','$(node scripts/gen-tour-hash.mjs pass2222)','coach'),('sm3','$(node scripts/gen-tour-hash.mjs pass3333)','coach')"
+#      （reset-local.sh 会自动做 b)，正常走它就不用手敲）
 #   c) dev 服务已起（npm run dev = 8789 兼容模式，.dev.vars 提供测试密钥）
 #      注意：wrangler dev 会继承 wrangler.jsonc 的 vars，而生产是 AUTH_MODE=oidc，
 #      所以 dev 脚本必须显式带 --var AUTH_MODE:compat（package.json 已配）。
-# 验证：播种→注册（自动登录）→验密登录→开放竞猜→HMAC 绑定→提交预测→截止→录结果→结算→确认发奖（发往不可达地址→unknown）→cron 重试→对账→强制改密→开放通知与截止提醒→到点自动截止→纯猜胜负与逐场命中（matchHits）
+#   d) mock 插件已起，且 stdout 重定向到文件，跑脚本时用 MOCK_LOG 指过去（步 12 数提交次数要用）：
+#      SYNC_SECRET=testsecret node scripts/mock-plugin.js 9991 > .smoke-tmp/mock.log 2>&1
+#      MOCK_LOG=.smoke-tmp/mock.log bash scripts/smoke-test.sh
+#      不设 MOCK_LOG 也能跑，步 12 会被跳过（其余步骤不受影响）。
+# 验证：播种→验密登录→开放竞猜→HMAC 绑定→提交预测→截止→录结果→结算→确认发奖→cron 重试→每日对账→战报拉取→数据库核对→开放通知与截止提醒→到点自动截止→纯猜胜负与逐场命中（matchHits）
+# 未覆盖（已收口，不再有对应功能）：自助注册、站内改密——兼容模式下两者一律 410。
 set -e
 BASE="http://127.0.0.1:8789"
 SECRET="${SYNC_SECRET:-testsecret}"
@@ -35,6 +41,13 @@ fi
 # 同理，MOCK_LOG 若是 /tmp/... 这类 MSYS 路径 node 读不到，先转成 Windows 路径。
 MOCK_LOG_WIN="$MOCK_LOG"
 if [ -n "$MOCK_LOG" ] && command -v cygpath >/dev/null 2>&1; then MOCK_LOG_WIN="$(cygpath -w "$MOCK_LOG")"; fi
+# MOCK_LOG 指的是 mock 插件的 stdout 日志（步 12 靠它数「每笔只提交一次」），不是插件自己写的文件。
+# 设了却读不到就直接说清楚，别让步 12 抛一屏 ENOENT 堆栈。
+if [ -n "$MOCK_LOG" ] && [ ! -f "$MOCK_LOG" ]; then
+  echo "✗ MOCK_LOG=$MOCK_LOG 不存在。它要指向 mock 插件的 stdout 日志，启动插件时重定向过去：" >&2
+  echo "  SYNC_SECRET=testsecret node scripts/mock-plugin.js 9991 > $MOCK_LOG 2>&1" >&2
+  exit 1
+fi
 J="$SMOKE_TMP"/whl-admin.jar; U1="$SMOKE_TMP"/whl-u1.jar; U2="$SMOKE_TMP"/whl-u2.jar; U3="$SMOKE_TMP"/whl-u3.jar
 say() { echo; echo "=== $1 ==="; }
 ok() { echo "  -> $1"; }
@@ -87,7 +100,7 @@ done
 say "0. /api/me 未登录"
 curl -sf "$BASE/api/me"; echo
 
-say "1. 管理员登录（smboss 账号在赛事库，验密走共享账号池）"
+say "1. 管理员登录（smboss 账号在赛事库，验密只读该表）"
 curl -sf -c "$J" -X POST "$BASE/api/login" -H 'Content-Type: application/json' \
   -d '{"username":"smboss","password":"secret123"}'; echo
 curl -sf -b "$J" "$BASE/api/me" | head -c 200; echo
@@ -95,17 +108,13 @@ ok "错误密码登录应被拒（401）："
 curl -s -X POST "$BASE/api/login" -H 'Content-Type: application/json' \
   -d '{"username":"smboss","password":"wrongpass1"}'; echo
 
-say "2. 三个群友注册（开放注册路径，注册即自动登录）"
-curl -sf -c "$U1" -X POST "$BASE/api/register" -H 'Content-Type: application/json' -d '{"name":"sm1","password":"pass1111","displayName":"小张"}'; echo
-curl -sf -c "$U2" -X POST "$BASE/api/register" -H 'Content-Type: application/json' -d '{"name":"sm2","password":"pass2222","displayName":"小李"}'; echo
-curl -sf -c "$U3" -X POST "$BASE/api/register" -H 'Content-Type: application/json' -d '{"name":"sm3","password":"pass3333","displayName":"小王"}'; echo
+say "2. 三个群友登录（账号播种在赛事库；兼容模式已无自助注册）"
+curl -sf -c "$U1" -X POST "$BASE/api/login" -H 'Content-Type: application/json' -d '{"username":"sm1","password":"pass1111"}'; echo
+curl -sf -c "$U2" -X POST "$BASE/api/login" -H 'Content-Type: application/json' -d '{"username":"sm2","password":"pass2222"}'; echo
+curl -sf -c "$U3" -X POST "$BASE/api/login" -H 'Content-Type: application/json' -d '{"username":"sm3","password":"pass3333"}'; echo
 U1ID=$(curl -sf -b "$U1" "$BASE/api/me" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).user.id))")
 U3ID=$(curl -sf -b "$U3" "$BASE/api/me" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).user.id))")
 ok "sm1 本地镜像 id=$U1ID，sm3 本地镜像 id=$U3ID（sm3 不参与预测，用于回归「非参与者不得分」）"
-ok "重复昵称注册应被拒（409）："
-curl -s -X POST "$BASE/api/register" -H 'Content-Type: application/json' -d '{"name":"sm1","password":"pass9999"}'; echo
-ok "弱密码注册应被拒（400）："
-curl -s -X POST "$BASE/api/register" -H 'Content-Type: application/json' -d '{"name":"sm9","password":"pass111"}'; echo
 
 say "3. 创建竞猜（1 场 3 项，立即开放）"
 DEADLINE=$(node -e "console.log(new Date(Date.now()+3600e3).toISOString())")
@@ -554,46 +563,7 @@ echo "$RPT5B" | node -e '
   assert(content.includes("胜负中 6 场") && content.includes("（+500）"), "标出「胜负中 6 场 （+500）」");
 '
 
-say "16. 强制改密：被管理员重置密码的账号在本站内改密（不再赶去赛事系统）"
-# sm4 由 reset-local.sh 预置成 must_change_pw=1（该标记只能在 dev 启动前写赛事本地库）
-U4="$SMOKE_TMP"/whl-u4.jar
-LOGIN4=$(curl -sf -c "$U4" -X POST "$BASE/api/login" -H 'Content-Type: application/json' -d '{"username":"sm4","password":"pass4444"}')
-echo "  login: $LOGIN4"
-curl -sf -b "$U4" "$BASE/api/me" > "$SMOKE_TMP"/whl-me4.json
-echo "  me: $(cat "$SMOKE_TMP"/whl-me4.json)"
-ok "未改密时应能看自身状态、但业务接口被拦下（403 password_change_required）："
-GATE4=$(curl -s -b "$U4" -w '\n%{http_code}' "$BASE/api/events")
-echo "$GATE4"
-ok "旧密码不对应被拒："
-curl -s -b "$U4" -X POST "$BASE/api/password" -H 'Content-Type: application/json' -d '{"oldPassword":"wrongold1","newPassword":"pass5555"}'; echo
-ok "新密码太弱应被拒："
-curl -s -b "$U4" -X POST "$BASE/api/password" -H 'Content-Type: application/json' -d '{"oldPassword":"pass4444","newPassword":"short1"}'; echo
-CHG4=$(curl -sf -b "$U4" -X POST "$BASE/api/password" -H 'Content-Type: application/json' -d '{"oldPassword":"pass4444","newPassword":"pass5555"}')
-echo "  password: $CHG4"
-curl -sf -b "$U4" "$BASE/api/me" > "$SMOKE_TMP"/whl-me4-2.json
-AFTER4=$(curl -s -o /dev/null -w '%{http_code}' -b "$U4" "$BASE/api/events")
-ok "改密后业务接口恢复：GET /api/events → $AFTER4"
-ok "旧密码应失效："
-curl -s -X POST "$BASE/api/login" -H 'Content-Type: application/json' -d '{"username":"sm4","password":"pass4444"}'; echo
-NEWLOGIN4=$(curl -sf -c "$SMOKE_TMP"/whl-u4b.jar -X POST "$BASE/api/login" -H 'Content-Type: application/json' -d '{"username":"sm4","password":"pass5555"}')
-echo "  relogin: $NEWLOGIN4"
-node -e '
-  const fs = require("fs");
-  const rd = (p) => JSON.parse(fs.readFileSync(process.env.SMOKE_TMP + p, "utf8"));
-  const login = JSON.parse(process.argv[1]), relogin = JSON.parse(process.argv[3]);
-  const me = rd("/whl-me4.json"), me2 = rd("/whl-me4-2.json");
-  const [gate, code] = process.argv[2].split("\n");
-  const assert = (c, m) => { if (!c) { console.error("  ✗ " + m); process.exit(1); } console.log("  ✓ " + m); };
-  assert(login.ok === true && login.mustChangePassword === true, "重置账号能登录，且响应带 mustChangePassword 标记");
-  assert(!!me.user && Number(me.user.id) > 0, "/api/me 在未改密时仍放行（白名单）");
-  assert(me.mustChangePassword === true, "/api/me 带 mustChangePassword=true");
-  assert(code === "403" && JSON.parse(gate).error === "password_change_required", `业务接口 403 password_change_required（实得 ${code}/${JSON.parse(gate).error}）`);
-  assert(me2.mustChangePassword === false, "改密后 /api/me 标记清零");
-  assert(relogin.ok === true && relogin.mustChangePassword === false, "新密码可登录且不再要求改密（已写回共享账号池）");
-' "$LOGIN4" "$GATE4" "$NEWLOGIN4"
-if [ "$AFTER4" = "200" ]; then ok "改密后 GET /api/events 200"; else echo "  ✗ 改密后 GET /api/events 期望 200，实得 $AFTER4"; exit 1; fi
-
-say "17. 开放通知 + 截止前提醒（复用 report 队列，kind 区分；提醒挂在 */5 扫描上）"
+say "16. 开放通知 + 截止前提醒（复用 report 队列，kind 区分；提醒挂在 */5 扫描上）"
 d1q() { npx wrangler d1 execute whl-guess --local --command "$1" --json 2>/dev/null | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.stringify(JSON.parse(s)[0].results)))"; }
 # 5 小时后截止：建期即开放，此时不该有提醒（还没进 4 小时窗口）
 DL7=$(node -e "console.log(new Date(Date.now()+5*3600e3).toISOString())")
@@ -648,7 +618,7 @@ node -e '
   assert(j(r3).sent === 0, `短窗局扫描时不重复发（实得 sent=${j(r3).sent}）`);
 ' "$ROWS7" "$STATE7" "$ROWS7B" "$R0" "$R1" "$R2" "$ROWS7C" "$STATE7B" "$R3"
 
-say "18. 到点自动截止（cron seal）：过期 open 单被扫成 sealed，两道提交闸门各拦一次"
+say "17. 到点自动截止（cron seal）：过期 open 单被扫成 sealed，两道提交闸门各拦一次"
 # 建单要求截止在未来，所以用「+2 秒后截止」：睡 3 秒让它过期，再触发扫描
 DL8=$(node -e "console.log(new Date(Date.now()+2e3).toISOString())")
 cat > "$SMOKE_TMP"/whl-autoseal.json <<JSON
@@ -675,7 +645,7 @@ node -e '
 ' "$ST8" "$REJ1" "$REJ2" "$REM8"
 
 echo
-say "19. 纯猜胜负 + matchHits（紧凑串标色的数据源：逐场命中与结算同口径）"
+say "18. 纯猜胜负 + matchHits（紧凑串标色的数据源：逐场命中与结算同口径）"
 DL9=$(node -e "console.log(new Date(Date.now()+3600e3).toISOString())")
 cat > "$SMOKE_TMP"/whl-pure.json <<JSON
 {"form": "pure", "title": "纯猜胜负紧凑串验证局", "deadline": "$DL9", "rewardCap": 1000, "openNow": true,
