@@ -1,4 +1,4 @@
-// 认证与会话（共享账号池：账号真源在赛事系统 D1 user 表，本地 users 表只是镜像锚点）
+// 认证与会话（统一认证：账号真源在 auth 认证中心，本地 users 表只是镜像锚点）
 // 插件方向请求用 HMAC-SHA256 签名验证（SYNC_SECRET 共享密钥）。
 
 import { HttpError } from './http.ts';
@@ -58,11 +58,11 @@ function getCookie(request: Request, name: string): string | null {
   return null;
 }
 
-// ---- 赛事系统共享账号池 ----
-// 账号真源在赛事系统 D1 `whl` 库 user 表；本地只存镜像（users.tour_id 唯一键）。
-// 注册/登录/改密直接读写赛事库（见 api.ts），密码哈希用 tourcrypto.ts 的赛事兼容格式，
-// 两边任一站点注册/改密的账号在所有站点都能登录。
-// 另有赛事系统发的 whl_session（HttpOnly，域属性由其 COOKIE_DOMAIN 决定），会话真源在其 KV：
+// ---- 认证双模式（统一认证：真源在 auth，兼容模式只读赛事库）----
+// 账号真源在 auth 认证中心；本地只存镜像（users.tour_id = auth account.id，唯一键）。
+// OIDC 模式下登录/注册/改密全部移交认证中心，姓名/角色/状态来自 claims（见 resolveOidcUser）；
+// 赛事库 `whl` 的 user 表已退化为镜像，仅兼容模式的旧账密登录还会只读校验它（见 api.ts）。
+// 兼容模式另有赛事系统发的 whl_session（HttpOnly，域属性由其 COOKIE_DOMAIN 决定），会话真源在其 KV：
 //   sess:<token> -> {"userId":n}。已登录比赛平台的用户打开竞猜站自动镜像登录。
 // 角色映射：admin/superadmin -> admin；coach（含 locked=1 的观众号）-> user。
 // locked 是赛事系统「未解锁绑队」的观众号，不是封禁 —— 放行；

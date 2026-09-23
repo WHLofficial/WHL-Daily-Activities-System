@@ -39,7 +39,7 @@ npm install
 #   SYNC_SECRET=testsecret / CRON_SECRET=cronsecret
 #   SYNC_BASE_URL=http://127.0.0.1:9991   ← 指向 mock 或真插件
 npx wrangler d1 migrations apply whl-guess --local   # 初始化本地 D1
-# 播种赛事本地库（共享账号池的账号真源；必须在 dev 启动【前】执行，dev 运行中跑会锁库静默失败）：
+# 播种赛事本地库（兼容模式旧账密登录要查它；账号真源在 auth，本地只需与 auth 账号同 id 的 user 行。必须在 dev 启动【前】执行，dev 运行中跑会锁库静默失败）：
 npx wrangler d1 execute whl --local --command "INSERT INTO organization (id,name,allow_open_reg) VALUES (1,'WHL',1) ON CONFLICT(id) DO UPDATE SET allow_open_reg=1"
 npx wrangler d1 execute whl --local --command "INSERT OR IGNORE INTO user (name,password_hash,role) VALUES ('smboss','$(node scripts/gen-tour-hash.mjs secret123)','admin')"
 npx wrangler dev --port 8789                         # 起服务（与 npm run dev 等价）
@@ -66,9 +66,9 @@ npx vitest run                  # 单元测试（in-process 伪认证中心，7 
 node scripts/smoke-oidc-local.mjs                        # 双服务联调（19 项断言，可连跑）
 ```
 
-OIDC 模式行为变化：登录/注册/改密入口 302 移交认证中心（直写赛事库的旧代码不再可达）；本地 30 天会话退役，改用 7 天 OIDC 会话（`__Host-guess_session`）；QQ 绑定读写本期仍走本地 `user_binding`（绑定全流程搬认证中心属 PRD P0-8，届时执行 user_binding → auth.identity 迁移）；auth 主动登出会经 back-channel 通知本站按 sid 吊销会话。
+OIDC 模式行为变化：登录/注册/改密入口 302 移交认证中心（直写赛事库的旧代码不再可达）；本地 30 天会话退役，改用 7 天 OIDC 会话（`__Host-guess_session`）；QQ 绑定真源已搬到 auth 的 `identity` 表（增量 9B），OIDC 模式下本地 `user_binding` 停写停读、读点实时查 auth（兼容模式仍用本地 `user_binding`）；auth 主动登出会经 back-channel 通知本站按 sid 吊销会话。
 
-> **⚠ 编排硬闸门（2026-09-14 生产事故后立规）**：`scripts/migrate-user-binding-to-auth.mjs` 的迁移**必须先于**打开 `OIDC_ISSUER`/`OIDC_CLIENT_ID`，并核对 auth `identity` 行数 = 本站 `user_binding` 行数，不一致就别切。OIDC 模式下每次登录都用 `/userinfo` 的 `qq` 覆盖本地绑定（`src/_lib/oidc.ts` 的 `mirrorBinding`），真源为空时 `qq=null` 会被当成「用户已解绑」而 `DELETE` 本地行——事故当天就是 identity 为空就切了 OIDC，管理员自己的绑定被自己的一次登录删掉。
+> **⚠ 绑定迁移硬闸门（2026-09-14 生产事故后立规，现已闭环）**：`scripts/migrate-user-binding-to-auth.mjs` 把绑定搬到 auth 的 `identity` 表，须先于打开 `OIDC_ISSUER`/`OIDC_CLIENT_ID`。事故根因（登录时 `/userinfo` 的 `qq` 为空被当成「已解绑」而 `DELETE` 本地行）已由增量 9B 根除：`mirrorBinding` 退役，OIDC 模式下本地 `user_binding` 停写停读，读点改实时查 auth（`src/_lib/authLookup.ts`）。
 
 ## 部署（首次）
 
@@ -79,13 +79,13 @@ OIDC 模式行为变化：登录/注册/改密入口 302 移交认证中心（�
 3. **部署**：`npx wrangler deploy`——`routes` 里声明的 `guess.whleague.win` 自定义域自动开通（DNS+证书）。
 4. **Secrets**：`npx wrangler secret put SYNC_SECRET / CRON_SECRET / SYNC_BASE_URL`（cron 已内置在 Worker，无独立服务）。
 
-## 账号体系（共享账号池）
+## 账号体系（统一认证：真源在 auth）
 
-- **账号真源在赛事系统 D1 `user` 表**：竞猜站有自己的注册/登录页（`POST /api/register` / `/api/login`），直接读写赛事库——在竞猜站注册的账号在赛事系统同样能登录，反之亦然。密码哈希为赛事兼容格式（`src/_lib/tourcrypto.ts`，与赛事系统 `worker/lib/crypto.ts` 一致）。
-- 附加便利：已登录比赛平台的用户打开竞猜站自动登录——跨项目绑定赛事系统 KV（`SESSION_KV`）读其 `whl_session` cookie，用户镜像进本库（`users.tour_id`）。
-- 注册门槛与赛事系统同一套：注册码在赛事系统管理台生成，两站通用；无码注册需赛事系统组织开关 `allow_open_reg` 放开，产生 locked 观众号。
-- 角色映射：赛事 `admin/superadmin` → 竞猜管理员；`coach`（含观众号）→ 普通用户；发起人是本库 `initiators` 名单，管理员在「发起人名单」里勾选。
-- 改密两站通用：`POST /api/password` 写回赛事库；`must_change_pw` 账号两站都视为不可登录，需回赛事系统改密。
+- **账号真源在 auth 认证中心**（`https://auth.whleague.win`）：生产 `AUTH_MODE=oidc` 下，登录/注册/改密入口 302 移交认证中心；姓名/状态/角色/权限全部来自登录回调存档的 claims（`src/_lib/auth.ts` 的 `parseOidcClaims`），不再查赛事库 `user` 表。赛事库 `whl` 的 `user` 表已退化为 auth 账号的精简镜像，**不要再新增对它的读写**。
+- 本地 `users` 表只是镜像锚点（`users.tour_id` = auth account.id，由 claims 建立/更新），预测、发奖、对账的 JOIN 都锚在本地 `users.id`。
+- 自动登录：OIDC 模式靠进站静默探测认证中心会话（`prompt=none`）；兼容模式靠跨项目共享 cookie——读赛事系统 KV（`SESSION_KV`）里的 `whl_session` 自动镜像登录（`users.tour_id`）。
+- 兼容模式（未配 `AUTH_MODE`，理论回滚位）：注册/改密一律 410；旧账密登录 `POST /api/login` 仍只读校验赛事库 `user` 表（`src/_lib/tourcrypto.ts` 的 PBKDF2 单串格式）并建 30 天本地会话。
+- 角色映射：OIDC 下由 claims 投影（`guess.admin` / `superadmin` → 竞猜管理员，其余 → 普通用户）；兼容模式按赛事库 `role` 映射（`admin`/`superadmin` → 管理员，其余含观众号 → 普通用户）。发起人是本库 `initiators` 名单，管理员在「发起人名单」里勾选。
 - **提交预测前必须绑定 QQ**（未绑定提交返回 403 并引导到绑定页）；绑定码流程见插件对接文档。
 - 主域名 `whleague.win`：竞猜绑 `guess.whleague.win`，赛事系统在 `tour.whleague.win`。
 - 赛事系统侧执行 `npx wrangler secret put COOKIE_DOMAIN` 填 `.whleague.win`（用 secret 而非 vars：`wrangler deploy` 会覆盖 dashboard vars），cookie 即跨子域生效。

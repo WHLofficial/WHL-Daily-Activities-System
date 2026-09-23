@@ -235,8 +235,8 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
       throw new HttpError(410, '改密已收口到统一认证中心，请前往认证中心操作');
     }
 
-    // 登录：验密走赛事系统 user 表（共享账号池，两边注册的账号互通），本地只建会话。
-    // must_change_pw=1 与赛事系统同规则：照常登录并建会话，但响应带 mustChangePassword，
+    // 登录（仅兼容模式可达）：验密只读赛事系统 user 表（账号真源在 auth，这里只做旧账密校验），
+    // 本地只建会话。must_change_pw=1 与赛事系统同规则：照常登录并建会话，但响应带 mustChangePassword，
     // 由前端强制引导到改密页，其余业务接口由 requirePwChanged 拦下。
     if (method === 'POST' && seg[0] === 'login') {
       // OIDC 模式：验密登录移交认证中心，302 进本站发起的 authorize 链

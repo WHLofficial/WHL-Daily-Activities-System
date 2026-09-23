@@ -6,7 +6,7 @@
 >
 > | 组件 | 地址 | 说明 |
 > |---|---|---|
-> | 赛事系统 | `tour.whleague.win`（已部署） | 登录真源，cookie 发给全主域 |
+> | 赛事系统 | `tour.whleague.win`（已部署） | 赛事平台；旧账密登录与共享 cookie 由它发出 |
 > | 竞猜系统 | `guess.whleague.win` | 单个 Worker：静态资源 + API + 内置 cron |
 > | AstrBot 插件 | 腾讯云服务器 | 积分真源，经 Cloudflare Tunnel 暴露 |
 >
@@ -106,10 +106,10 @@ npx wrangler secret put SYNC_BASE_URL    # 填 https://astrbot.whleague.win
 
 ### 5.1 账号说明（无需 setup）
 
-竞猜站与赛事系统共享账号池：账号真源在赛事系统 `user` 表，竞猜站有自己的注册/登录页。**没有也不需要 `/api/setup`**——
+账号真源在 auth 认证中心（`https://auth.whleague.win`），竞猜站不再自建注册/登录页。**没有也不需要 `/api/setup`**——
 
-- 管理员身份 = 赛事系统的 `admin/superadmin` 账号直接登录竞猜站即得；
-- 普通账号在竞猜站注册页注册（或赛事系统注册后直接登录竞猜站）。
+- 管理员身份 = 认证中心里带 `guess.admin` / `superadmin` 角色的账号，登录竞猜站即得（兼容模式按赛事库 `user.role` 映射）；
+- 普通账号在认证中心注册；竞猜站的注册/改密入口 302 跳认证中心（兼容模式下返回 410）。
 
 竞猜 Worker 侧已不再使用 `SETUP_TOKEN`（`/api/setup` 路由与配套 secret 都已删除）。若历史上在竞猜 Worker 上配过，清掉即可：
 
@@ -117,7 +117,9 @@ npx wrangler secret put SYNC_BASE_URL    # 填 https://astrbot.whleague.win
 npx wrangler secret delete SETUP_TOKEN
 ```
 
-### 5.2 共享账号与自动登录检查
+### 5.2 共享账号与自动登录检查（仅兼容模式）
+
+> 生产是 OIDC 模式（`wrangler.jsonc` 的 `AUTH_MODE=oidc`），自动登录靠进站静默探测认证中心会话，不依赖跨子域 cookie——跳过本节直接验 5.3。以下仅用于兼容模式回滚后的排查。
 
 1. 服务器上给赛事系统配 cookie 域（让 cookie 跨子域）：
    ```bash
@@ -127,7 +129,7 @@ npx wrangler secret delete SETUP_TOKEN
 2. 浏览器登录 `tour.whleague.win`（赛事系统），然后新标签打开 `guess.whleague.win`。
 3. ✅ 验证：竞猜页右上角直接显示赛事系统的昵称（无需再登录）。
    - 若显示未登录：检查 COOKIE_DOMAIN 是否已配、竞猜是否走 `guess.` 子域、浏览器是否有 `whleague.win` 域下的 `whl_session` cookie。
-4. 再验证独立注册登录：竞猜站退出后用注册页建一个新号（需注册码或赛事系统放开开放注册），确认该账号也能登录赛事系统。
+4. 再验证统一登录：在认证中心注册一个新号，回到竞猜站确认能登录并拿到对应角色（兼容模式下注册入口返回 410，属预期）。
 
 ### 5.3 管理台配置
 

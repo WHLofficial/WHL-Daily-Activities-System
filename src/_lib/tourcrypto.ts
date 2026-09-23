@@ -1,7 +1,7 @@
 // 赛事系统兼容密码哈希（与 WHL-tournament-management-system worker/lib/crypto.ts 保持一致）。
-// 账号真源在赛事系统 D1 `user` 表，密码格式为单串 `pbkdf2$iter$salt_b64$hash_b64`；
-// 本模块是唯一允许写入该列的实现 —— 两边任一站点写入的密码，另一站都能验证。
-// 迭代数等参数不要单方面改动，需与赛事系统同步。
+// 账号真源已搬到 auth 认证中心，本模块现只服务：兼容模式的旧账密登录校验（只读，
+// api.ts 的 tourVerifyPassword）与本地联调种子数据的哈希生成（scripts/gen-tour-hash.mjs）。
+// 密码格式为单串 `pbkdf2$iter$salt_b64$hash_b64`；迭代数等参数不要单方面改动，需与赛事系统同步。
 
 const PBKDF2_ITERATIONS = 25_000; // 与赛事系统一致（Workers 免费档 CPU 预算内取值）
 
