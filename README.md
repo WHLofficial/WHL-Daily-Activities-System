@@ -42,7 +42,7 @@ npx wrangler d1 migrations apply whl-guess --local   # 初始化本地 D1
 # 播种赛事本地库（兼容模式旧账密登录要查它；账号真源在 auth，本地只需与 auth 账号同 id 的 user 行。必须在 dev 启动【前】执行，dev 运行中跑会锁库静默失败）：
 npx wrangler d1 execute whl --local --command "INSERT INTO organization (id,name,allow_open_reg) VALUES (1,'WHL',1) ON CONFLICT(id) DO UPDATE SET allow_open_reg=1"
 npx wrangler d1 execute whl --local --command "INSERT OR IGNORE INTO user (name,password_hash,role) VALUES ('smboss','$(node scripts/gen-tour-hash.mjs secret123)','admin')"
-npx wrangler dev --port 8789                         # 起服务（与 npm run dev 等价）
+npm run dev                                          # 起服务（8789，兼容模式）
 
 # 另开两个终端：
 SYNC_SECRET=testsecret node scripts/mock-plugin.js 9991   # 模拟插件
@@ -51,11 +51,13 @@ bash scripts/smoke-test.sh                                # 端到端冒烟（�
 
 冒烟脚本覆盖：播种赛事库（开放注册+管理员）→ 前端脚本语法检查 → 登录 → 注册（重名/弱密码拒绝）→ 建期（含已下线题型探针）→ 绑定码认领（含重放拒绝）→ 提交预测（未绑定拒绝）→ 他人答案可见 → 奖励一览（最高可得）→ 截止 → 录比分 → 结算断言（档位/上限/非参与者）→ 确认发奖（幂等 + 并发）→ 无人命中跳过发奖 → 猜胜负三种模式 → cron 重试（含错 key 拒绝）→ 每日对账 → 战报拉取 → 数据库核对 → 强制改密 → 开放通知与截止前提醒。
 
+> **本地 dev 的模式开关**：`wrangler dev` 会继承 `wrangler.jsonc` 的 `vars`，而生产那套是 `AUTH_MODE=oidc`。所以 `npm run dev` 显式带 `--var AUTH_MODE:compat` 回到兼容模式（`src/_lib/oidc.ts:29` 的 `isOidc` 只认字面量 `'oidc'`），`npm run dev:oidc` 才是 OIDC 联调。`scripts/smoke-test.sh` 跑的是兼容模式链路，开头有模式闸门，跑错模式会带着正确命令直接退出。
+
 **Windows 注意**：`wrangler dev` 崩溃后常残留 `workerd.exe` 孤儿进程，重启前先 `taskkill /F /IM workerd.exe`。本地开发用 8789 端口——8788 被历史僵尸连接污染过会一直挂起。
 
 ### OIDC 模式（统一认证迁移步骤②，auth 项目 PRD P0-6）
 
-配置 `OIDC_ISSUER` + `OIDC_CLIENT_ID` 即切换为认证中心登录（撤掉变量重新部署 = 回滚到共享 cookie/本地会话）；本地联调再加 `OIDC_REDIRECT_ORIGIN`（wrangler dev 会把 custom_domain 路由的 request.url 重写成 `http://guess.whleague.win`，需覆盖回本端口；生产是 https 正确值，无需配置）：
+配置 `AUTH_MODE=oidc` + `OIDC_ISSUER` + `OIDC_CLIENT_ID` 三者齐备才切到认证中心登录（判定见 `src/_lib/oidc.ts:29` 的 `isOidc`；撤掉 `AUTH_MODE` 重新部署 = 回滚到共享 cookie/本地会话）；本地联调走 `npm run dev:oidc`，它把 ISSUER/CLIENT_ID 指向本地 8792 并补 `OIDC_REDIRECT_ORIGIN`（wrangler dev 会把 custom_domain 路由的 request.url 重写成 `http://guess.whleague.win`，需覆盖回本端口；生产是 https 正确值，无需配置）：
 
 ```bash
 # 前置：auth 项目已起 dev（8792）并播种 guess client 与测试账号（auth 项目 seed-local-*.mjs 的 SQL）

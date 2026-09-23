@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# WHL 竞猜系统 本地冒烟测试（共享账号池版：注册/登录走赛事库）
+# WHL 竞猜系统 本地冒烟测试（兼容模式版：注册/登录走赛事库只读校验）
 # 前置（顺序重要）：
 #   a) 竞猜库全新：npx wrangler d1 migrations apply whl-guess --local
 #   b) 赛事本地库播种（必须在 dev 启动【前】执行——dev 运行中跑 d1 execute 会锁库静默失败）：
@@ -7,7 +7,9 @@
 #      npx wrangler d1 execute whl --local --command "INSERT OR IGNORE INTO user (name,password_hash,role) VALUES ('smboss','$(node scripts/gen-tour-hash.mjs secret123)','admin')"
 #      # 步 16 用的「被管理员重置密码」账号（reset-local.sh 也会自动预置）
 #      npx wrangler d1 execute whl --local --command "INSERT OR REPLACE INTO user (name,password_hash,role,locked,must_change_pw) VALUES ('sm4','$(node scripts/gen-tour-hash.mjs pass4444)','coach',0,1)"
-#   c) dev 服务已起（npx wrangler dev --port 8789，.dev.vars 提供测试密钥）
+#   c) dev 服务已起（npm run dev = 8789 兼容模式，.dev.vars 提供测试密钥）
+#      注意：wrangler dev 会继承 wrangler.jsonc 的 vars，而生产是 AUTH_MODE=oidc，
+#      所以 dev 脚本必须显式带 --var AUTH_MODE:compat（package.json 已配）。
 # 验证：播种→注册（自动登录）→验密登录→开放竞猜→HMAC 绑定→提交预测→截止→录结果→结算→确认发奖（发往不可达地址→unknown）→cron 重试→对账→强制改密→开放通知与截止提醒→到点自动截止→纯猜胜负与逐场命中（matchHits）
 set -e
 BASE="http://127.0.0.1:8789"
@@ -17,6 +19,19 @@ CRON="${CRON_SECRET:-cronsecret}"
 # Git Bash 的 /tmp 在两者眼里不是同一个目录（curl 看到 %TEMP%，node 看到 C:\tmp），会互相找不到文件。
 SMOKE_TMP="$(cd "$(dirname "$0")/.." && pwd -W 2>/dev/null || pwd)/.smoke-tmp"
 mkdir -p "$SMOKE_TMP"; export SMOKE_TMP
+
+# 前置闸门：本脚本走兼容模式的旧账密登录。wrangler dev 会继承 wrangler.jsonc 的 vars，
+# 而生产那套是 AUTH_MODE=oidc——OIDC 下登录会 302 到认证中心，脚本拿不到会话就崩在
+# 第 1 步（set -e）。先探一次，不对就带着正确命令退出。
+if ! curl -sf -m 10 "$BASE/api/me" -o "$SMOKE_TMP"/preflight.json; then
+  echo "✗ 连不上 $BASE，请先起服务：npm run dev" >&2
+  exit 1
+fi
+if ! grep -q '"authMode":"shared"' "$SMOKE_TMP"/preflight.json; then
+  echo "✗ $BASE 不是兼容模式（/api/me 未返回 authMode=shared）：$(cat "$SMOKE_TMP"/preflight.json)" >&2
+  echo "  用 npm run dev 起服务（已带 --var AUTH_MODE:compat）；OIDC 模式请改用 node scripts/smoke-oidc-local.mjs。" >&2
+  exit 1
+fi
 # 同理，MOCK_LOG 若是 /tmp/... 这类 MSYS 路径 node 读不到，先转成 Windows 路径。
 MOCK_LOG_WIN="$MOCK_LOG"
 if [ -n "$MOCK_LOG" ] && command -v cygpath >/dev/null 2>&1; then MOCK_LOG_WIN="$(cygpath -w "$MOCK_LOG")"; fi
