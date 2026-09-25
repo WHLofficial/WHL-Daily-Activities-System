@@ -245,3 +245,13 @@ export function wirePassword(root, onDone) {
   root.querySelector('#pw-go').onclick = go;
   root.querySelectorAll('input').forEach((i) => i.addEventListener('keydown', (e) => e.key === 'Enter' && go()));
 }
+
+// 页脚版本号。本仓没有构建步骤、静态资源不经打包，故这里的版本与 package.json 的 version 手工同步（见 VERSIONS.md）。
+export const APP_VERSION = '1.0.1';
+
+if (typeof document !== 'undefined' && !document.querySelector('.app-footer')) {
+  const foot = document.createElement('footer');
+  foot.className = 'app-footer';
+  foot.textContent = `WHL 竞猜系统 · v${APP_VERSION}`;
+  document.body.appendChild(foot);
+}

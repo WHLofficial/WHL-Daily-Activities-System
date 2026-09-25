@@ -19,6 +19,7 @@ body {
 :focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 
 .wrap { max-width: 720px; margin: 0 auto; padding: 16px 16px 72px; }
+.app-footer { max-width: 720px; margin: 0 auto; padding: 0 16px 28px; text-align: center; color: var(--sub); font-size: 12px; letter-spacing: .4px; }
 
 /* ---------- 顶栏：品牌 + 导航 + 用户区 ---------- */
 .topbar {

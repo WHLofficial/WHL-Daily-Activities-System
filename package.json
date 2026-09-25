@@ -1,6 +1,7 @@
 {
   "name": "whl-guess",
   "private": true,
+  "version": "1.0.1",
   "description": "WHL 竞猜系统 — CF Pages + Pages Functions + D1；发奖同步到 AstrBot 插件",
   "scripts": {
     "dev": "wrangler dev --port 8789 --var AUTH_MODE:compat",
