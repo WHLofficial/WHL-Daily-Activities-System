@@ -117,7 +117,7 @@ async function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       { headers: { 'content-type': 'application/json' } },
     );
   }
-  // 机器查询通道（增量 9B）：按 auth machineGate 契约验签，返回 stub.bindings
+  // 机器查询通道（v1.0.0）：按 auth machineGate 契约验签，返回 stub.bindings
   if (url.pathname === '/api/admin/identity/lookup') {
     if (stub.lookupStatus) return new Response('boom', { status: stub.lookupStatus });
     const h = (init?.headers ?? {}) as Record<string, string>;
@@ -280,7 +280,7 @@ describe('统一认证接入（步骤② OIDC RP）', () => {
     expect(meBody.authMode).toBe('shared');
     expect(meBody.authHome).toBeNull();
 
-    // 增量 9D：注册/改密直写赛事库已删，兼容模式一律 410
+    // v1.0.0：注册/改密直写赛事库已删，兼容模式一律 410
     const reg = await call(env, 'POST', '/api/register', { body: { name: 'x', password: 'TestPass123' } });
     expect(reg.status).toBe(410);
     const pwd = await call(env, 'POST', '/api/password', { body: { newPassword: 'TestPass123' } });
@@ -466,7 +466,7 @@ describe('统一认证接入（步骤② OIDC RP）', () => {
   });
 });
 
-describe('QQ 绑定实时查询与镜像退役（增量 9B）', () => {
+describe('QQ 绑定实时查询与镜像退役（v1.0.0）', () => {
   it('停镜像：登录/换绑/解绑全程不写本地 user_binding（历史事故面根除）', async () => {
     vi.stubGlobal('fetch', fakeFetch);
     const { env, sqlite } = freshEnv(true);

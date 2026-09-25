@@ -4,7 +4,7 @@
 #   a) 竞猜库全新：npx wrangler d1 migrations apply whl-guess --local
 #   b) 赛事本地库播种（必须在 dev 启动【前】执行——dev 运行中跑 d1 execute 会锁库静默失败）：
 #      npx wrangler d1 execute whl --local --command "INSERT OR IGNORE INTO user (name,password_hash,role) VALUES ('smboss','$(node scripts/gen-tour-hash.mjs secret123)','admin')"
-#      # 步 2 的三个群友。兼容模式的自助注册已在增量 9D 收口（POST /api/register 一律 410），
+#      # 步 2 的三个群友。兼容模式的自助注册已在 v1.0.0 收口（POST /api/register 一律 410），
 #      # 所以群友账号也得先播种进赛事库、再走 /api/login 拿会话。
 #      npx wrangler d1 execute whl --local --command "INSERT OR IGNORE INTO user (name,password_hash,role) VALUES ('sm1','$(node scripts/gen-tour-hash.mjs pass1111)','coach'),('sm2','$(node scripts/gen-tour-hash.mjs pass2222)','coach'),('sm3','$(node scripts/gen-tour-hash.mjs pass3333)','coach')"
 #      （reset-local.sh 会自动做 b)，正常走它就不用手敲）

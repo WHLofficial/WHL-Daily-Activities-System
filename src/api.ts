@@ -221,14 +221,14 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
       (method === 'POST' && (seg[0] === 'login' || seg[0] === 'register' || seg[0] === 'logout' || seg[0] === 'password')) ||
       (method === 'GET' && seg[0] === 'me');
     if (!pwGate) await requirePwChanged(env, request);
-    // 注册：收口到认证中心（增量 9D 残留清理：兼容模式直写赛事库 user 表的分支已删，
+    // 注册：收口到认证中心（v1.0.0 残留清理：兼容模式直写赛事库 user 表的分支已删，
     // 账号真源只在 auth；兼容模式下本端点返回 410，注册走认证中心）
     if (method === 'POST' && seg[0] === 'register') {
       if (isOidc(env)) return Response.redirect(`${env.OIDC_ISSUER}/register`, 302);
       throw new HttpError(410, '注册已收口到统一认证中心，请前往认证中心注册');
     }
 
-    // 改密：收口到认证中心（增量 9D 残留清理：兼容模式直写赛事库 user 表 password_hash
+    // 改密：收口到认证中心（v1.0.0 残留清理：兼容模式直写赛事库 user 表 password_hash
     // 的分支已删；兼容模式下本端点返回 410）
     if (method === 'POST' && seg[0] === 'password') {
       if (isOidc(env)) return Response.redirect(`${env.OIDC_ISSUER}/password`, 302);
@@ -289,7 +289,7 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
       // 未登录也带 authMode/authHome：前端进站第一件事就是渲染登录入口，得知道往哪跳
       if (!user) return json({ user: null, authMode: isOidc(env) ? 'oidc' : 'shared', authHome: isOidc(env) ? env.OIDC_ISSUER : null });
       // 绑定信息与发起人标记互不依赖，并行查（/me 每次进站都要走）。
-      // 增量 9B：OIDC 绑定真源实时查 auth（failOpen：查询失败按未绑定展示，不挡进站）；
+      // v1.0.0：OIDC 绑定真源实时查 auth（failOpen：查询失败按未绑定展示，不挡进站）；
       // 兼容模式读本地镜像（只读）
       const [binding, isInit] = await Promise.all([
         isOidc(env)
@@ -447,7 +447,7 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
 
     if (method === 'PUT' && seg[0] === 'events' && seg[2] === 'predictions' && seg.length === 3) {
       const user = await requireUser(env, request);
-      // 绑定门槛（增量 9B）：OIDC 实时查 auth（fail-closed：通道故障 503，宁拒不误放）；兼容模式读本地镜像
+      // 绑定门槛（v1.0.0）：OIDC 实时查 auth（fail-closed：通道故障 503，宁拒不误放）；兼容模式读本地镜像
       const bound = isOidc(env)
         ? (await lookupQqBindings(env, [user.tour_id])).size > 0
         : Boolean(await env.DB.prepare('SELECT 1 AS ok FROM user_binding WHERE user_id = ?').bind(user.id).first());
@@ -520,7 +520,7 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
       if (method === 'GET' && seg[1] === 'users' && seg.length === 2) {
         // 步骤③：OIDC 按权限点判定（持有人与旧 admin 角色重合），兼容模式回落角色
         await requireAdminPerm(env, request, user, 'guess.users.manage', '仅管理员可查看账号');
-        // 增量 10：OIDC 下 user_binding 已停写停读，SQL 不再 JOIN（bound 由下面实时查 auth 补齐）；
+        // v1.0.1：OIDC 下 user_binding 已停写停读，SQL 不再 JOIN（bound 由下面实时查 auth 补齐）；
         // 兼容模式仍读本地镜像快照，原 SQL 保留
         const oidc = isOidc(env);
         const rows = (await env.DB.prepare(
@@ -538,7 +538,7 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
                  LEFT JOIN initiators i ON i.user_id = u.id
                 ORDER BY u.id LIMIT 200`,
         ).all()).results;
-        // 增量 9B：bound 标记实时查 auth（failOpen：通道故障不挡管理页）
+        // v1.0.0：bound 标记实时查 auth（failOpen：通道故障不挡管理页）
         if (oidc) {
           const boundMap = await lookupQqByLocalIds(env, (rows as any[]).map((r) => r.id), { failOpen: true });
           for (const r of rows as any[]) r.bound = boundMap.has(r.id);
@@ -673,7 +673,7 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
 
       if (isEventRoute && method === 'GET' && seg.length === 3) {
         // 六条查询互不依赖，一把并行（管理详情是操作前必经页面）。
-        // 增量 9B：OIDC 下绑定真源在 auth，跳过本地 user_binding JOIN，改查后批量 lookup 补 qq
+        // v1.0.0：OIDC 下绑定真源在 auth，跳过本地 user_binding JOIN，改查后批量 lookup 补 qq
         const oidcMode = isOidc(env);
         const [matchesR, itemsR, predsR, bindingsR, st, batch] = await Promise.all([
           env.DB.prepare('SELECT * FROM match WHERE event_id = ? ORDER BY id').bind(eventId).all(),
@@ -836,7 +836,7 @@ export async function handleApi(ctx: { request: Request; env: any; waitUntil?: (
           });
         }
         const results = JSON.parse(st.result_json);
-        // 发奖绑定真源（增量 9B）：OIDC 实时批量查 auth（fail-closed：通道故障 503，宁停发不漏发/误发），
+        // 发奖绑定真源（v1.0.0）：OIDC 实时批量查 auth（fail-closed：通道故障 503，宁停发不漏发/误发），
         // 不再用登录时点镜像快照（历史事故：快照过期、qq=null 被当解绑误删本地行）；兼容模式读本地镜像
         let qqMap: Map<number, string>;
         if (isOidc(env)) {

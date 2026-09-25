@@ -1,4 +1,4 @@
-// QQ 绑定真源实时查询（增量 9B）：绑定在 auth 的 identity 表，本地 user_binding 自本增量起
+// QQ 绑定真源实时查询（v1.0.0）：绑定在 auth 的 identity 表，本地 user_binding 自本增量起
 // 停镜像停读（表保留作历史对账），各读点改走本 helper 批量查询——一次 HMAC 机器请求、
 // 单批 ≤100、禁 N+1。契约与 auth machineGate 逐字一致：
 // X-Sign = HMAC-SHA256(secret, "POST|path|ts|raw") hex，时间窗 ±300s（auth hmac.ts 校验）。

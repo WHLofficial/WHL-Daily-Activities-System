@@ -41,7 +41,7 @@
   "triggers": {
     "crons": ["*/5 * * * *", "0 9 * * *"]
   },
-  // 统一认证中心（生产）：AUTH_MODE="oidc" 显式开启 RP 模式（增量 9 显式化，登录跳 auth /authorize，
+  // 统一认证中心（生产）：AUTH_MODE="oidc" 显式开启 RP 模式（v1.0.0 显式化，登录跳 auth /authorize，
   // 会话存本地 oidc_session 表 + __Host-whl-guess_session cookie）；撤掉 AUTH_MODE 重新部署即回兼容模式。
   "vars": {
     "AUTH_MODE": "oidc",

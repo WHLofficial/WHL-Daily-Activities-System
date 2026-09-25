@@ -3,7 +3,7 @@
 // 签发侧在 auth 服务，这里只做客户端。配置 OIDC_ISSUER + OIDC_CLIENT_ID 即切换，
 // 未配置 = 兼容模式（共享 cookie 透传 + 本地 30 天会话），/api/auth/* 端点按需退化。
 // 步骤③收口：回调拉 userinfo 存 claims（角色/权限/状态），判定不再查赛事库 user 表；
-// QQ 绑定不再镜像本地（增量 9B 停 user_binding 读写），读点实时查 auth 的 identity 表。
+// QQ 绑定不再镜像本地（v1.0.0 停 user_binding 读写），读点实时查 auth 的 identity 表。
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
 import { HttpError } from './http.ts';
 // 运行时才引用（函数声明，无模块求值期依赖）：auth.ts 也反向导入本文件，ESM 环安全
@@ -23,7 +23,7 @@ export const TOUR_HOME = 'https://tour.whleague.win/';
 
 export const BACKCHANNEL_LOGOUT_EVENT = 'http://schemas.openid.net/event/backchannel-logout';
 
-// OIDC 模式 = AUTH_MODE 显式配 "oidc"（增量 9 显式化）+ 两项连接变量齐备；未配 AUTH_MODE =
+// OIDC 模式 = AUTH_MODE 显式配 "oidc"（v1.0.0 显式化）+ 两项连接变量齐备；未配 AUTH_MODE =
 // 兼容模式（共享 cookie 透传 + 本地会话）。不再靠 OIDC_ISSUER 的有无隐式判定——
 // vars 随 wrangler.jsonc 一起部署，杜绝「忘配/半配悄悄改行为」。
 export function isOidc(env: any): boolean {
@@ -284,7 +284,7 @@ if (method === 'GET' && seg[1] === 'login' && seg.length === 2) {
     ).bind(await sha256hex(token), payload.sub, payload.sid, JSON.stringify(claims), now,
       new Date(Date.now() + SESSION_TTL_SECONDS * 1000).toISOString()).run();
 
-    // 增量 9B：QQ 绑定镜像（mirrorBinding）已退役——绑定真源实时查 auth（_lib/authLookup.ts），
+    // v1.0.0：QQ 绑定镜像（mirrorBinding）已退役——绑定真源实时查 auth（_lib/authLookup.ts），
     // 本地 user_binding 停写停读，根除「qq=null 被当解绑误删本地行」的事故面；登录路径少 2 次 D1 写
     return redirect(safeReturn(temp.returnTo), sessionCookie(token), clearCookie(OIDC_TEMP_COOKIE));
   }

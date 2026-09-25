@@ -71,9 +71,9 @@ npx vitest run                  # 单元测试（in-process 伪认证中心，7 
 node scripts/smoke-oidc-local.mjs                        # 双服务联调（19 项断言，可连跑）
 ```
 
-OIDC 模式行为变化：登录/注册/改密入口 302 移交认证中心（直写赛事库的旧代码不再可达）；本地 30 天会话退役，改用 7 天 OIDC 会话（`__Host-guess_session`）；QQ 绑定真源已搬到 auth 的 `identity` 表（增量 9B），OIDC 模式下本地 `user_binding` 停写停读、读点实时查 auth（兼容模式仍用本地 `user_binding`）；auth 主动登出会经 back-channel 通知本站按 sid 吊销会话。
+OIDC 模式行为变化：登录/注册/改密入口 302 移交认证中心（直写赛事库的旧代码不再可达）；本地 30 天会话退役，改用 7 天 OIDC 会话（`__Host-guess_session`）；QQ 绑定真源已搬到 auth 的 `identity` 表（v1.0.0），OIDC 模式下本地 `user_binding` 停写停读、读点实时查 auth（兼容模式仍用本地 `user_binding`）；auth 主动登出会经 back-channel 通知本站按 sid 吊销会话。
 
-> **⚠ 绑定迁移硬闸门（2026-09-14 生产事故后立规，现已闭环）**：`scripts/migrate-user-binding-to-auth.mjs` 把绑定搬到 auth 的 `identity` 表，须先于打开 `OIDC_ISSUER`/`OIDC_CLIENT_ID`。事故根因（登录时 `/userinfo` 的 `qq` 为空被当成「已解绑」而 `DELETE` 本地行）已由增量 9B 根除：`mirrorBinding` 退役，OIDC 模式下本地 `user_binding` 停写停读，读点改实时查 auth（`src/_lib/authLookup.ts`）。
+> **⚠ 绑定迁移硬闸门（2026-09-14 生产事故后立规，现已闭环）**：`scripts/migrate-user-binding-to-auth.mjs` 把绑定搬到 auth 的 `identity` 表，须先于打开 `OIDC_ISSUER`/`OIDC_CLIENT_ID`。事故根因（登录时 `/userinfo` 的 `qq` 为空被当成「已解绑」而 `DELETE` 本地行）已由 v1.0.0 根除：`mirrorBinding` 退役，OIDC 模式下本地 `user_binding` 停写停读，读点改实时查 auth（`src/_lib/authLookup.ts`）。
 
 ## 部署（首次）
 

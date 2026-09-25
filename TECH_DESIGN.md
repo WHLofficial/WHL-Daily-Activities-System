@@ -144,7 +144,7 @@ GET  /sync/summary?date=   （按人汇总，对账用）
 
 ## 四、身份打通（已实现，2026-09-08）
 
-> **⚠ 本节已被统一认证迁移取代（2026-09 起，增量 9 系列）**：账号真源已从赛事系统 `whl` 库 `user` 表搬到 auth 认证中心；竞猜站不再自带注册/登录（OIDC 模式下 302 移交认证中心，兼容模式返回 410），赛事库 `user` 表退化为镜像。QQ 绑定真源也搬到 auth 的 `identity` 表（本地 `user_binding` 在 OIDC 下停写停读）。下文保留 2026-09-08 当时的方案原貌，当前口径见 README「账号体系（统一认证：真源在 auth）」。
+> **⚠ 本节已被统一认证迁移取代（2026-09 起，v1.0.0 系列）**：账号真源已从赛事系统 `whl` 库 `user` 表搬到 auth 认证中心；竞猜站不再自带注册/登录（OIDC 模式下 302 移交认证中心，兼容模式返回 410），赛事库 `user` 表退化为镜像。QQ 绑定真源也搬到 auth 的 `identity` 表（本地 `user_binding` 在 OIDC 下停写停读）。下文保留 2026-09-08 当时的方案原貌，当前口径见 README「账号体系（统一认证：真源在 auth）」。
 
 - **共享账号池（2026-09-08 起，替代早期「仅 cookie 互通」方案）**：账号真源 = 赛事系统 D1 `whl` 库 `user` 表。竞猜站自带注册/登录（`POST /api/register` / `POST /api/login`），直接读写赛事库；密码哈希为赛事兼容格式（`src/_lib/tourcrypto.ts` ↔ 赛事系统 `worker/lib/crypto.ts`，`pbkdf2$iter$salt_b64$hash_b64` 单串）——任一站注册/改密的账号全系列站点通用。注册门槛复用赛事系统：注册码（`signup_code` 表，原子核销）或组织 `allow_open_reg` 开关（无码注册 = locked 观众号）；竞猜站注册的角色只会是 coach，绝不产出 admin。改密 `POST /api/password` 写回赛事库并清 `must_change_pw`。
 - **自动登录（附加通道）**：竞猜跨项目绑定赛事系统的 KV（会话真源 `sess:<token>`）与 D1 `whl` 库，收到请求读 `whl_session` cookie → KV 取 userId → 查 user 表 → 镜像进本库 `users`（`tour_id` 唯一键，upsert）。赛事系统仅需把 cookie 的 Domain 设为主域根（`COOKIE_DOMAIN` secret = `.whleague.win`，可选；不设则 host-only）。
