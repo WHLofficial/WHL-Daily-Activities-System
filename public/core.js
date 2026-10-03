@@ -48,17 +48,22 @@ export async function withBusy(btn, fn) {
   }
 }
 
+// 同库存量时间列是 datetime('now') 空格格式（无 T 无 Z）：解析前统一归一成 ISO，
+// 避免空格串在部分引擎被当本地时区解析（偏 8 小时）。存量列格式单一，做 ISO 迁移前禁混写。
+function parseTs(ts) {
+  return new Date(ts.includes('T') || ts.includes('Z') ? ts : ts.replace(' ', 'T') + 'Z');
+}
+
 export function fmtTime(iso) {
   if (!iso) return '';
-  const d = new Date(iso.includes('T') || iso.includes('Z') ? iso : iso.replace(' ', 'T') + 'Z');
-  return d.toLocaleString('zh-CN', {
+  return parseTs(iso).toLocaleString('zh-CN', {
     timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric',
     hour: '2-digit', minute: '2-digit', weekday: 'short',
   });
 }
 
 export function countdown(iso) {
-  const ms = new Date(iso).getTime() - Date.now();
+  const ms = parseTs(iso).getTime() - Date.now();
   if (ms <= 0) return '已截止';
   const h = Math.floor(ms / 3600_000);
   const m = Math.floor((ms % 3600_000) / 60_000);
@@ -247,7 +252,7 @@ export function wirePassword(root, onDone) {
 }
 
 // 页脚版本号。本仓没有构建步骤、静态资源不经打包，故这里的版本与 package.json 的 version 手工同步（见 VERSIONS.md）。
-export const APP_VERSION = '1.0.1';
+export const APP_VERSION = '1.0.2';
 
 if (typeof document !== 'undefined' && !document.querySelector('.app-footer')) {
   const foot = document.createElement('footer');

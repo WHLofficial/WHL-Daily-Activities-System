@@ -65,12 +65,14 @@ export function buildReportText(
   return lines.join('\n');
 }
 
-// 东八区展示时间（MM-DD HH:mm）：文案面向国内群聊，直接给本地时间，不让人自己换算
+// 东八区展示时间（MM-DD HH:mm）：文案面向国内群聊，直接给本地时间，不让人自己换算。
+// 入参当前只有 ISO 的 event.deadline，仍按双格式归一，防止未来喂进存量空格格式时静默偏 8 小时。
 export function fmtE8(iso: string): string {
+  const d = new Date(iso.includes('T') || iso.includes('Z') ? iso : iso.replace(' ', 'T') + 'Z');
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Shanghai',
     month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-  }).formatToParts(new Date(iso));
+  }).formatToParts(d);
   const g = (t: string) => parts.find((p) => p.type === t)?.value || '';
   return `${g('month')}-${g('day')} ${g('hour')}:${g('minute')}`;
 }

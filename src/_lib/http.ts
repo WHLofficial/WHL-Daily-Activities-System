@@ -31,6 +31,8 @@ export function nowISO(): string {
   return new Date().toISOString();
 }
 
+// 存量时间列（created_at / mirrored_at 等 datetime('now') 默认值）统一是空格格式，写侧走本函数；
+// 这些列禁改用 toISOString() 混写——同日「T > 空格」会让 ORDER BY 在一天内错序。新列一律 nowISO()。
 export function nowSql(): string {
   return new Date().toISOString().replace('T', ' ').slice(0, 19);
 }

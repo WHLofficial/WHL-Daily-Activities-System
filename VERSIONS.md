@@ -18,8 +18,9 @@
 | （1–8 未标注） | `v0.1.0` | 竞猜系统地基：CF Pages + Pages Functions + D1、竞猜/发奖/鸣谢 | 地基 |
 | 9 | `v1.0.0` | 统一认证收口 / `user_binding` 镜像退役 | major：本仓认领 9B2 / 9C / 9D——停镜像停读、五处读点改实时查 auth、`isOidc` 改判 `AUTH_MODE`、删兼容直写死码（写入口下线） |
 | 10 | `v1.0.1` | 用户列表按模式分流 | patch：无新增能力，内部重构（OIDC 分支不再 JOIN `user_binding`） |
+| — | `v1.0.2` | 时间口径对齐：cron 对账时刻订正 + 读侧双格式防御 | patch：无新增能力——缺陷修补（`0 9 * * *` 按 CF UTC 实际北京 17:00 触发，与全仓「09:00 北京时间」承诺差 8 小时，订正为 `0 1 * * *`）；存量空格格式列判定不迁移、读侧解析归一防御（core.js `parseTs` / report.ts `fmtE8`）；`tests/cron-pair.test.ts` 静态锁 crons 双写一致性。依据：club 仓 v6.25.0 spec `2026-10-03-timezone-display-design.md` §3/§4 |
 
-**当前版本：`v1.0.1`**
+**当前版本：`v1.0.2`**
 
 ## 落地位置
 
