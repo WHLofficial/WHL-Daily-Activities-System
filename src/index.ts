@@ -28,7 +28,7 @@ export default {
       const s = await dispatchPending(env);
       const rem = await sendDueReminders(env);
       console.log('[cron] seal:', seal, 'retry:', JSON.stringify(s), 'remind:', JSON.stringify(rem));
-    } else if (event.cron === '0 9 * * *') {
+    } else if (event.cron === '0 1 * * *') { // 必须与 wrangler.jsonc crons 双写一致（UTC 表达式 = 北京 09:00），错配 = 对账静默停跑（无告警，tests/cron-pair.test.ts 锁一致性）
       const r = await runRecon(env);
       console.log('[cron] recon:', JSON.stringify(r));
     }
