@@ -79,6 +79,44 @@ body {
 .topbar button.ghost:hover:not(:disabled) { background: rgba(255,255,255,.12); }
 .topbar button.danger { background: var(--bad); border-color: transparent; color: #fff; font-size: 13px; padding: 4px 10px; }
 
+/* ---------- 右上角 ≡ 用户菜单（改密码 + 登出收纳，v1.1.0） ---------- */
+/* 浮层取值对齐本站卡片语言（白卡 + --line 描边，同 .card 与鸣谢卡片先例），不搬 club 的深色弹层。
+   登出按钮沿用 ghost/danger className 切换（app.js/admin.js 的两段式逻辑一字不改），
+   因此下方给 .danger 在菜单内的红色警示态加了显式规则，确认态视觉不因换容器丢失 */
+.topbar .user-menu-wrap { position: relative; display: inline-flex; }
+.topbar .user-menu-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; padding: 0;
+  background: transparent; border: 1px solid rgba(255,255,255,.45); border-radius: var(--radius-sm);
+  color: #fff; cursor: pointer;
+}
+.topbar .user-menu-btn:hover:not(:disabled) { background: rgba(255,255,255,.12); }
+.topbar .user-menu {
+  position: absolute; top: calc(100% + 10px); right: 0; z-index: 50;
+  min-width: 148px; max-width: calc(100vw - 40px);
+  display: flex; flex-direction: column; align-items: stretch;
+  padding: 6px;
+  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-md);
+  box-shadow: 0 12px 32px rgba(26,29,33,.18);
+}
+.topbar .user-menu-head {
+  padding: 6px 8px 4px; font-size: 12.5px; font-weight: 600; color: var(--sub);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.topbar .user-menu-sep { height: 1px; margin: 4px 2px; background: var(--line); }
+.topbar .user-menu a,
+.topbar .user-menu button {
+  display: block; width: 100%; text-align: left; margin: 0;
+  padding: 7px 10px; background: none; border: none; border-radius: var(--radius-sm);
+  font: inherit; font-size: 14px; font-weight: 500; color: var(--ink);
+  text-decoration: none; cursor: pointer; white-space: nowrap;
+}
+/* 同为 (0,4,1) 的 .topbar button.ghost:hover:not(:disabled) 写在本块之前，后写者胜 */
+.topbar .user-menu a:hover,
+.topbar .user-menu button:hover:not(:disabled) { background: var(--brand-tint); color: var(--brand); }
+.topbar .user-menu button.danger { background: var(--bad); border-color: transparent; color: #fff; }
+.topbar .user-menu button.danger:hover:not(:disabled) { background: var(--bad); color: #fff; }
+
 /* ---------- 按钮 ---------- */
 button { font: inherit; font-weight: 600; padding: 8px 16px; border: 1px solid transparent; border-radius: var(--radius-sm); background: var(--brand); color: #fff; cursor: pointer; transition: background .15s; max-width: 100%; }
 button:hover:not(:disabled) { background: var(--brand-deep); }
@@ -232,6 +270,8 @@ code.kbd { background: #eceef1; border-radius: 6px; padding: 1px 7px; font-size:
   .topbar .top-actions { gap: 8px; }
   .topbar .top-actions .btn-credit, .topbar .top-actions .btn-tour { min-height: 30px; padding: 4px 9px; font-size: 11px; }
   .topbar .nav-links, .topbar .userbox { gap: 10px; font-size: 13px; }
+  .topbar .user-menu-btn { width: 30px; height: 30px; }
+  .topbar .user-menu { min-width: 140px; }
   .topbar .nav-links a, .topbar .nav-tab { font-size: 13px; }
   .wrap { padding: 12px 12px 64px; }
   .card { padding: 16px; }

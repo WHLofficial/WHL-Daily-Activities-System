@@ -415,6 +415,8 @@ function renderTopbar() {
   if (user) {
     document.getElementById('user-name').textContent = user.display_name || user.username || '';
     document.getElementById('user-role').textContent = roleLabel(user, me.is_initiator);
+    // ≡ 菜单头显示用户名（菜单壳静态在 HTML 里，登录态随 userbox 一起显隐）
+    document.getElementById('user-menu-head').textContent = user.display_name || user.username || '';
   }
 }
 

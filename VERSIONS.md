@@ -19,8 +19,9 @@
 | 9 | `v1.0.0` | 统一认证收口 / `user_binding` 镜像退役 | major：本仓认领 9B2 / 9C / 9D——停镜像停读、五处读点改实时查 auth、`isOidc` 改判 `AUTH_MODE`、删兼容直写死码（写入口下线） |
 | 10 | `v1.0.1` | 用户列表按模式分流 | patch：无新增能力，内部重构（OIDC 分支不再 JOIN `user_binding`） |
 | — | `v1.0.2` | 时间口径对齐：cron 对账时刻订正 + 读侧双格式防御 | patch：无新增能力——缺陷修补（`0 9 * * *` 按 CF UTC 实际北京 17:00 触发，与全仓「09:00 北京时间」承诺差 8 小时，订正为 `0 1 * * *`）；存量空格格式列判定不迁移、读侧解析归一防御（core.js `parseTs` / report.ts `fmtE8`）；`tests/cron-pair.test.ts` 静态锁 crons 双写一致性。依据：club 仓 v6.25.0 spec `2026-10-03-timezone-display-design.md` §3/§4 |
+| — | `v1.1.0` | 顶栏右上角 ≡ 菜单：改密码 + 登出收纳进弹层 | minor：新增用户可见能力（≡ 弹层菜单，两页顶栏）；两页 HTML 加静态菜单壳（`.user-menu-wrap` 内 ≡ 按钮 + `role="menu"` 弹层，登出项 `role="menuitem"` 仅登录态随 userbox 显隐），`core.js` 加 `initUserMenu()`（开合 + aria-expanded 同步 + Esc/点外部/hashchange 三路收起，挂进 `initTopbar`），`renderTopbar` 写菜单头用户名；登出两段式确认语义一字未改，兼容模式无时区控件 ⇒ 不含时区档（对齐 club 仓 v6.41.0 同款改动的 guess 仓版）。`tests/topbar-menu.test.ts` 5 例静态锁（aria 契约 / 索引序 / 登出语义 / CSS 右锚 / 版本双写），变异 M1-M3 实测真红 |
 
-**当前版本：`v1.0.2`**
+**当前版本：`v1.1.0`**
 
 ## 落地位置
 

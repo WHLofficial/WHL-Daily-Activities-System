@@ -182,6 +182,8 @@ let lastQuote = -1;
 
 // 顶栏在 HTML 里是静态的，与登录态无关：两个入口都常显，启动时接一次线即可
 export function initTopbar() {
+  initUserMenu();
+
   const tour = document.getElementById('btn-tour');
   if (tour) tour.href = TOUR_URL;
 
@@ -228,6 +230,30 @@ export function initTopbar() {
   };
 }
 
+// ---------- 顶栏：右上角 ≡ 用户菜单（改密码 + 登出收纳，v1.1.0） ----------
+// 菜单壳在两页 HTML 里静态写死（.user-menu-wrap > .user-menu-btn + .user-menu），
+// 这里只管开合与 aria 状态：Esc / 点外部 / 换页三路收起，交互对齐鸣谢弹层。
+// 未登录时整个 userbox 隐藏，≡ 跟着不出现（本站没有时区控件，空菜单无意义）。
+export function initUserMenu() {
+  const wrap = document.getElementById('user-menu-wrap');
+  const btn = document.getElementById('user-menu-btn');
+  const menu = document.getElementById('user-menu');
+  if (!wrap || !btn || !menu) return;
+
+  const isOpen = () => !menu.hidden;
+  const setOpen = (open) => {
+    menu.hidden = !open;
+    btn.setAttribute('aria-expanded', String(open));
+  };
+
+  btn.onclick = () => setOpen(!isOpen());
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setOpen(false); });
+  // 点外部关闭；菜单内点「登出」不算外部——两段确认的文案要一直可见
+  document.addEventListener('mousedown', (e) => { if (!wrap.contains(e.target)) setOpen(false); });
+  // hash 路由换页自动收起（点「改密码」这类导航项后弹层不再挂着）
+  window.addEventListener('hashchange', () => setOpen(false));
+}
+
 // 改密码表单（用户端与管理台共用）：账号全站通用，改完两边都生效
 export const PASSWORD_FORM = `
   <h3>修改密码</h3>
@@ -252,7 +278,7 @@ export function wirePassword(root, onDone) {
 }
 
 // 页脚版本号。本仓没有构建步骤、静态资源不经打包，故这里的版本与 package.json 的 version 手工同步（见 VERSIONS.md）。
-export const APP_VERSION = '1.0.2';
+export const APP_VERSION = '1.1.0';
 
 if (typeof document !== 'undefined' && !document.querySelector('.app-footer')) {
   const foot = document.createElement('footer');

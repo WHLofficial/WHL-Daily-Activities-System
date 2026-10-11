@@ -24,8 +24,20 @@
   <span class="userbox" id="userbox" hidden>
     <span id="user-name"></span>
     <span class="role-badge" id="user-role"></span>
-    <a id="nav-password" href="#/password">改密码</a>
-    <button class="ghost" id="nav-logout">登出</button>
+    <!-- v1.1.0：改密码与登出收进右上角 ≡ 菜单，userbox 只留身份展示。
+         菜单壳静态写死（两页同款），开合与 aria 状态在 core.js 的 initUserMenu 接线；
+         未登录时整个 userbox 隐藏，≡ 跟着不出现 -->
+    <span class="user-menu-wrap" id="user-menu-wrap">
+      <button class="user-menu-btn" id="user-menu-btn" type="button" aria-label="菜单" aria-haspopup="menu" aria-expanded="false" title="菜单">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+      <span class="user-menu" id="user-menu" role="menu" aria-label="用户菜单" hidden>
+        <span class="user-menu-head" id="user-menu-head" role="presentation"></span>
+        <a id="nav-password" href="#/password" role="menuitem">改密码</a>
+        <span class="user-menu-sep" role="separator"></span>
+        <button class="ghost" id="nav-logout" type="button" role="menuitem">登出</button>
+      </span>
+    </span>
   </span>
 </header>
 <main class="wrap" id="app"></main>
