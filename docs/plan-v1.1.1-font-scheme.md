@@ -65,6 +65,6 @@ guess 的比分是表单 `input.score-in`（17px / 700）与表格数字，比�
 
 ## 6. 待办
 
-- [ ] 发布：`npm run deploy`（Workers Builds 是否自动出包待观察），上线后回写 VERSIONS 与 AGENTS 口径。
+- [x] 发布（2026-10-23）：push `b8b2859..8c47dc2`，Workers Builds **已接自动出包**，Version `5ca00dbd-d220-4260-992c-612c02f4f91e`（02:35:35Z）；生产 `APP_VERSION='1.1.1'`、三个字体 200。本仓 push 即上线，不需要 `npm run deploy`。
 - [ ] 如果以后给 guess 加页面级标题（≥22px），再把该选择器并进 `--font-display` 并重跑子集脚本。
 - [ ] 管理台表头/数字若出现对齐问题，再评估 `td.num` 是否切换等宽（本轮不动列宽）。
