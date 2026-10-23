@@ -1,5 +1,57 @@
 /* WHL 竞猜系统 — 结构对齐赛事系统，配色沿用本站蓝色令牌 */
+
+/* ---------- 字体（v1.1.1）----------
+   自托管，与俱乐部/赛事平台同一套三族：Inter 管拉丁正文、Noto Serif SC 管「信件」式的鸣谢弹窗、
+   JetBrains Mono 管绑定码这类要逐位读的字符串。中文正文不下载网络字体，落到系统黑体。
+   宋体只有 600 一个字重，用到它的规则必须写 600 + font-synthesis-weight: none，否则浏览器会造
+   假粗体（中文会糊）。宋体子集只在鸣谢弹窗打开时才下载（无 preload）。 */
+@font-face {
+  font-family: 'Noto Serif SC';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/noto-serif-sc-600-subset.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/inter-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+/* latin-ext 只在出现 Š/Đ/Ł 这类字符时才下载（约 73KB），常规中文页面不会拉 */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/inter-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url('/fonts/jbmono-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url('/fonts/jbmono-latin-ext.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
 :root {
+  /* 字体角色：标题衬线 / 正文无衬线 / 数字等宽 */
+  --font-display: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', 'SimSun', serif;
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans SC', 'Source Han Sans SC', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
   --bg: #f5f6f8; --card: #fff; --ink: #1a1d21; --sub: #6b7280;
   --brand: #1652f0; --brand-ink: #fff;
   --brand-deep: #0f3bb0; /* 顶栏描边、主按钮悬停 */
@@ -13,7 +65,8 @@
 
 body {
   margin: 0; background: var(--bg); color: var(--ink);
-  font: 15px/1.55 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font: 15px/1.55 sans-serif;
+  font-family: var(--font-sans);
   -webkit-tap-highlight-color: transparent;
 }
 :focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
@@ -184,6 +237,7 @@ details.card summary { cursor: pointer; font-weight: 600; }
 .wdl-all-row .seg { flex: 0 0 210px; }
 .wdl-all-row .seg label { padding: 7px 0; font-size: 13px; }
 .bigcode {
+  font-family: var(--font-mono);
   font-size: 34px; font-weight: 800; letter-spacing: 6px; text-align: center;
   padding: 14px; background: var(--brand-tint); border-radius: var(--radius-md); margin: 10px 0; color: var(--brand);
 }
@@ -213,7 +267,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .reward-line + .reward-line { border-top: 1px dashed var(--line); }
 .reward-line .q { font-size: 13px; font-weight: 600; }
 .reward-line .muted { font-size: 12px; margin-top: 2px; }
-code.kbd { background: #eceef1; border-radius: 6px; padding: 1px 7px; font-size: 13px; }
+code.kbd { font-family: var(--font-mono); background: #eceef1; border-radius: 6px; padding: 1px 7px; font-size: 13px; }
 
 /* ---------- 提示条与浮层提示 ---------- */
 .banner { border-radius: var(--radius); padding: 10px 14px; margin: 12px 0; font-size: 14px; }
@@ -245,15 +299,17 @@ code.kbd { background: #eceef1; border-radius: 6px; padding: 1px 7px; font-size:
   padding: 22px 24px 20px; text-align: center;
   box-shadow: 0 12px 48px rgba(26,29,33,.5), 0 0 26px rgba(240,190,70,.4);
 }
-.credit-title { margin: 0 0 10px; font-size: 20px; font-weight: 700; color: #8a6414; }
+/* 鸣谢弹窗是站内唯一的「信件」场景：标题与引文走宋体（子集只有 600，别写 700） */
+.credit-title { margin: 0 0 10px; font-size: 20px; font-weight: 600; color: #8a6414; font-family: var(--font-display); font-synthesis-weight: none; }
 .credit-main { margin: 0 0 14px; font-size: 15px; line-height: 1.7; }
 .credit-main b { color: #8a6414; }
 .credit-quote {
   margin: 0; padding: 12px 14px; border-left: 3px solid #e0a93e;
   background: rgba(240,190,70,.12); border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   font-size: 14px; line-height: 1.75; text-align: left;
+  font-family: var(--font-display); font-weight: 600; font-synthesis-weight: none;
 }
-.credit-quote cite { display: block; margin-top: 8px; text-align: right; font-style: normal; color: var(--sub); font-size: 12.5px; }
+.credit-quote cite { display: block; margin-top: 8px; text-align: right; font-style: normal; color: var(--sub); font-size: 12.5px; font-family: var(--font-sans); font-weight: 400; }
 .credit-close {
   position: absolute; top: 10px; right: 10px; width: 32px; height: 32px; padding: 0;
   border: 1px solid var(--line); border-radius: var(--radius-sm); background: #fff;

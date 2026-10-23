@@ -6,3 +6,5 @@ node_modules/
 .prod-secrets.txt
 .zcode/
 .smoke-tmp/
+# 宋体子集脚本的原字体缓存（14.8MB TTF 与 chars.txt 不入库）
+scripts/.font-cache/
