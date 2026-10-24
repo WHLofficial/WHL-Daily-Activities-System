@@ -1,23 +1,25 @@
 /* WHL 竞猜系统 — 结构对齐赛事系统，配色沿用本站蓝色令牌 */
 
-/* ---------- 字体（v1.1.1）----------
-   自托管，与俱乐部/赛事平台同一套三族：Inter 管拉丁正文、Noto Serif SC 管「信件」式的鸣谢弹窗、
+/* ---------- 字体（v1.1.2）----------
+   走平台共享源，与俱乐部/赛事平台同一套三族：Inter 管拉丁正文、Noto Serif SC 管「信件」式的鸣谢弹窗、
    JetBrains Mono 管绑定码这类要逐位读的字符串。中文正文不下载网络字体，落到系统黑体。
    宋体只有 600 一个字重，用到它的规则必须写 600 + font-synthesis-weight: none，否则浏览器会造
-   假粗体（中文会糊）。宋体子集只在鸣谢弹窗打开时才下载（无 preload）。 */
+   假粗体（中文会糊）。宋体 union 只在鸣谢弹窗打开时才下载（无 preload）。
+   共享源不可达时整栈回退系统字体（swap，无阻塞渲染路径）；本地 public/fonts/ 保留作回滚垫。
+   字体版本：v1（升级时全局替换 fonts.whleague.win/v1/） */
 @font-face {
   font-family: 'Noto Serif SC';
   font-style: normal;
   font-weight: 600;
   font-display: swap;
-  src: url('/fonts/noto-serif-sc-600-subset.woff2') format('woff2');
+  src: url('https://fonts.whleague.win/v1/noto-serif-sc-600-union.woff2') format('woff2');
 }
 @font-face {
   font-family: 'Inter';
   font-style: normal;
   font-weight: 100 900;
   font-display: swap;
-  src: url('/fonts/inter-latin.woff2') format('woff2');
+  src: url('https://fonts.whleague.win/v1/inter-latin.woff2') format('woff2');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 /* latin-ext 只在出现 Š/Đ/Ł 这类字符时才下载（约 73KB），常规中文页面不会拉 */
@@ -26,7 +28,7 @@
   font-style: normal;
   font-weight: 100 900;
   font-display: swap;
-  src: url('/fonts/inter-latin-ext.woff2') format('woff2');
+  src: url('https://fonts.whleague.win/v1/inter-latin-ext.woff2') format('woff2');
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 @font-face {
@@ -34,7 +36,7 @@
   font-style: normal;
   font-weight: 100 800;
   font-display: swap;
-  src: url('/fonts/jbmono-latin.woff2') format('woff2');
+  src: url('https://fonts.whleague.win/v1/jbmono-latin.woff2') format('woff2');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 @font-face {
@@ -42,7 +44,7 @@
   font-style: normal;
   font-weight: 100 800;
   font-display: swap;
-  src: url('/fonts/jbmono-latin-ext.woff2') format('woff2');
+  src: url('https://fonts.whleague.win/v1/jbmono-latin-ext.woff2') format('woff2');
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 

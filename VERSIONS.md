@@ -23,6 +23,8 @@
 | — | `v1.1.1` | 全站字体方案：正文 Inter + 绑定码 JetBrains Mono + 鸣谢弹窗宋体 | patch：无新增能力——纯展示微调（自托管字体），零迁移零接口零生产写。交付：`public/fonts/` 5 个 woff2（宋体子集 174,704 B / Inter 拉丁 48,444 + 扩展 74,328 / 等宽 40,404 + 15,196，全 OFL）；`public/style.css` 顶部 5 条 `@font-face`（全 swap）+ `--font-display/--font-sans/--font-mono` 令牌，body 改 `var(--font-sans)`；鸣谢标题与引文走宋体 600 + `font-synthesis-weight: none`，`.bigcode` / `code.kbd` 走等宽；两页各加 Inter latin preload（宋体不 preload，弹窗打开时才下）；`scripts/build-fonts.py` 再生成子集（1111 字 / CJK 871）；`tests/fonts.test.ts` 5 条静态锁。实测：`/` 只拉 48,444 B、鸣谢追加 174,704 B、绑定码页追加 40,404 B，无 latin-ext；375 无横向溢出；`npm test` 4 文件 29 例全绿。依据：club v6.53.2 / tour v5.8.1–5.8.3 同套方案；计划 `docs/plan-v1.1.1-font-scheme.md`。**上线（2026-10-23）**：push `b8b2859..8c47dc2`，Workers Builds 自动部署 Version `5ca00dbd-d220-4260-992c-612c02f4f91e`（Created 2026-10-23T02:35:35Z）；生产 `core.js` 的 `APP_VERSION = '1.1.1'`、`style.css` 含 3 处 `Noto Serif SC`、三个字体各 200（174,704 / 48,444 / 40,404）；1440/375 首页与鸣谢弹窗截图复核，无横向溢出。 |
 
 
+| — | `v1.1.2` | 字体源切换平台共享源：`public/style.css` 5 条 `@font-face` 的 src 与两页 Inter latin preload 改绝对 URL `https://fonts.whleague.win/v1/`（衬线换 union 单文件 `noto-serif-sc-600-union.woff2`，本仓用户代价 174,704 B → ~306KB、仅鸣谢弹窗打开时才下、swap 不阻塞），unicode-range / font-weight 区间 / `font-display: swap` / crossorigin 声明原样保留，CSS 顶部加版本锚注释「字体版本：v1（升级时全局替换 fonts.whleague.win/v1/）」；`tests/fonts.test.ts` 五个文件体积锁改为「@font-face/preload URL 全部命中共享源且版本一致」静态锁（设计稿 §10 TC-8 口径），swap / 无 local() / 只 preload inter-latin / 衬线 600+禁合成断言保留，变异验证（src 回退本地路径）G1+G5 定向红；`public/fonts/` 本地五件保留作回滚垫（阶段 4 清理另轮授权）。与上方同号行（会话对齐）共用 1.1.2 号：版本文件 bump 由其在途先行落位、本增量只追加台账。**待上线** | patch：无新增能力——纯资源来源切换，零迁移零接口零生产写。依据：club 仓设计稿 `2026-10-24-shared-font-source-design.md` §5/§8/§9 阶段 2/§10 |
+
 **当前版本：`v1.1.1`**
 
 ## 落地位置

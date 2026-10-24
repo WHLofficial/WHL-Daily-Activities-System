@@ -1,24 +1,25 @@
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-// v1.1.1 字体方案：自托管 Inter（正文拉丁）+ Noto Serif SC 子集（鸣谢弹窗）+ JetBrains Mono（绑定码）。
-// 本仓是纯静态 HTML + 原生 JS，没有构建与 jsdom，沿用 topbar-menu.test.ts 的静态锁思路：
-// 文本扫描 style.css 与两页 HTML，卡住手工回归最易犯的错——字体文件改路径、preload 忘写 crossorigin、
-// 衬线漏写 600 / font-synthesis-weight（会合成假粗）、宋体被误 preload（171KB 每页都下）。
+// v1.1.2 字体方案：三族走平台共享源 https://fonts.whleague.win/v1/（Inter 拉丁正文 + Noto Serif SC
+// union 鸣谢弹窗 + JetBrains Mono 绑定码，四站同一份、跨站共享缓存分区），本地 public/fonts/ 五件
+// 保留作回滚垫。本仓是纯静态 HTML + 原生 JS，没有构建与 jsdom，沿用 topbar-menu.test.ts 的静态锁思路：
+// 文本扫描 style.css 与两页 HTML，卡住手工回归最易犯的错——src/preload 没指向共享源或版本不一致、
+// preload 忘写 crossorigin、衬线漏写 600 / font-synthesis-weight（会合成假粗）、宋体被误 preload。
+// 断言只扫本地文本，不访问 fonts.whleague.win（域名未建立前本地不可解析是预期）。
 const root = fileURLToPath(new URL('..', import.meta.url));
 const read = (p: string) => readFileSync(root + p, 'utf8');
-const size = (p: string) => statSync(root + p).size;
 const pages = ['public/index.html', 'public/admin.html'];
 
-describe('v1.1.1 字体方案静态锁（TC-FONT-G1…G5）', () => {
-  it('TC-FONT-G1 三族五个 @font-face 全部 swap 且指向 /fonts/', () => {
+describe('v1.1.2 字体方案静态锁（TC-FONT-G1…G5）', () => {
+  it('TC-FONT-G1 三族五个 @font-face 全部 swap 且指向共享源 /v1/', () => {
     const css = read('public/style.css');
     const faces = css.match(/@font-face \{[^}]*\}/g) ?? [];
     expect(faces).toHaveLength(5);
     for (const face of faces) {
       expect(face).toContain('font-display: swap');
-      expect(face).toMatch(/url\('\/fonts\/[a-z0-9-]+\.woff2'\)/);
+      expect(face).toMatch(/url\('https:\/\/fonts\.whleague\.win\/v1\/[a-z0-9-]+\.woff2'\)/);
       expect(face).not.toContain('local(');
     }
     // 拉丁字体带 unicode-range（latin-ext 懒加载的前提），宋体子集不带（缺字逐字回退系统宋体）
@@ -55,21 +56,35 @@ describe('v1.1.1 字体方案静态锁（TC-FONT-G1…G5）', () => {
     expect(css).not.toMatch(/\.card h3 \{[^}]*font-family/);
   });
 
-  it('TC-FONT-G4 两页只预载 Inter latin（crossorigin），不预载宋体', () => {
+  it('TC-FONT-G4 两页只预载共享源 Inter latin（crossorigin），不预载宋体与本地路径', () => {
     for (const path of pages) {
       const html = read(path);
       expect(html, path).toContain(
-        '<link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>',
+        '<link rel="preload" href="https://fonts.whleague.win/v1/inter-latin.woff2" as="font" type="font/woff2" crossorigin>',
       );
-      expect(html, path).not.toContain('noto-serif-sc-600-subset.woff2" as="font"');
+      expect(html, path).not.toContain('noto-serif-sc-600-union.woff2" as="font"');
+      // 回滚垫语义：两页不得引用本地 /fonts/（防止与共享源混用两套版本）
+      expect(html, path).not.toContain('href="/fonts/');
     }
   });
 
-  it('TC-FONT-G5 五个字体文件在库且体积锁定', () => {
-    expect(size('public/fonts/noto-serif-sc-600-subset.woff2')).toBe(174_704);
-    expect(size('public/fonts/inter-latin.woff2')).toBe(48_444);
-    expect(size('public/fonts/inter-latin-ext.woff2')).toBe(74_328);
-    expect(size('public/fonts/jbmono-latin.woff2')).toBe(40_404);
-    expect(size('public/fonts/jbmono-latin-ext.woff2')).toBe(15_196);
+  it('TC-FONT-G5 五条 src 与两页 preload 全部命中共享源且版本一致（TC-8）', () => {
+    // 设计稿 §8/§10：体积锁随 union 重跑即失效，改锁「URL 全命中共享源 + 版本一致」；
+    // 集合逐字比对（衬线是 union 单文件，文件名与本地 subset 不同）。
+    const expected = [
+      'https://fonts.whleague.win/v1/noto-serif-sc-600-union.woff2',
+      'https://fonts.whleague.win/v1/inter-latin.woff2',
+      'https://fonts.whleague.win/v1/inter-latin-ext.woff2',
+      'https://fonts.whleague.win/v1/jbmono-latin.woff2',
+      'https://fonts.whleague.win/v1/jbmono-latin-ext.woff2',
+    ];
+    const css = read('public/style.css');
+    const srcs = [...css.matchAll(/src: url\('([^']+)'\)/g)].map((m) => m[1]);
+    expect(srcs).toEqual(expected);
+    // 版本锚注释（升级时全局替换的抓手）必须在场
+    expect(css).toContain('字体版本：v1（升级时全局替换 fonts.whleague.win/v1/）');
+    for (const path of pages) {
+      expect(read(path), path).toContain('href="https://fonts.whleague.win/v1/inter-latin.woff2"');
+    }
   });
 });
